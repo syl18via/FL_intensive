@@ -354,7 +354,7 @@ if __name__ == "__main__":
         federated_train_data_divide = get_data_for_digit_mix(mnist_train)
         federated_train_data = federated_train_data_divide
 
-
+    ### Read inital model parameters from files
     f_ini_p = open(os.path.join(os.path.dirname(__file__), "initial_model_parameters.txt"), "r")
     para_lines = f_ini_p.readlines()
     w_paras = para_lines[0].split("\t")
@@ -365,19 +365,23 @@ if __name__ == "__main__":
     b_initial = np.asarray(b_paras, dtype=np.float32).reshape([10])
     f_ini_p.close()
 
+    ### Initialize the global model parameters
     initial_model = {
         'weights': w_initial,
         'bias': b_initial
     }
-
     model = initial_model
     learning_rate = 0.1
+
+    ### Main process of FL
     for round_num in range(50):
+        ### Train the model parameters distributedly
+        #   return a list of model parameters
+        #       local_models[0][0], weights of the 0-th agent
+        #       local_models[0][1], bias of the 0-th agent
         local_models = federated_train(model, learning_rate, federated_train_data)
-        print("learning rate: ", learning_rate)
-        #print(local_models[0][0])#第0个agent的weights矩阵
-        #print(local_models[0][1])#第0个agent的bias矩阵
-        #print(len(local_models))
+        
+        ### Output model parameters of all agents
         for local_index in range(len(local_models)):
             f = open(os.path.join(os.path.dirname(__file__), "weights_"+str(local_index)+".txt"),"a",encoding="utf-8")
             for i in local_models[local_index][0]:
@@ -397,20 +401,34 @@ if __name__ == "__main__":
             print("***" + str(learning_rate) + "***",file=f)
             print("-"*50,file=f)
             f.close()
+        
+        ### Calculate the global model parameters
         m_w = np.zeros([784, 10], dtype=np.float32)
         m_b = np.zeros([10], dtype=np.float32)
+        print("Round {} at {:.3f} s, learning rate: ".format(round_num, time.time()-start_time, learning_rate))
         for local_model_index in range(len(local_models)):
             m_w = np.add(np.multiply(local_models[local_model_index][0], agents_weights[local_model_index]), m_w)
             m_b = np.add(np.multiply(local_models[local_model_index][1], agents_weights[local_model_index]), m_b)
-            model = {
+
+            ### Evaluate the model parameters of current agent
+            loss = federated_eval(
+                {
+                'weights': local_models[local_model_index][0],
+                'bias': local_models[local_model_index][1]
+                }, 
+                federated_train_data)
+            print(' - agent {}, loss={}'.format(local_model_index, loss))
+        
+        ### Update the global model parameters
+        model = {
                 'weights': m_w,
                 'bias': m_b
-            }
-        learning_rate = learning_rate * 0.9
+        }
         loss = federated_eval(model, federated_train_data)
-        print('round {}, loss={}'.format(round_num, loss))
-        print(time.time()-start_time)
+        print('round {}, loss={}\n'.format(round_num, loss))
+        learning_rate = learning_rate * 0.9
 
+    ### Calculate the Feedback
     gradient_weights = []
     gradient_biases = []
     gradient_lrs = []
