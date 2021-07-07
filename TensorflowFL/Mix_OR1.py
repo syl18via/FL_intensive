@@ -324,7 +324,6 @@ def shapley_list_indexed(original_l, ll):
             return i
     return -1
 
-
 def PowerSetsBinary(items):
     N = len(items)
     set_all = []
@@ -345,9 +344,43 @@ class Task:
         self.learning_rate = None
         self.epoch = 0
         self.required_client_num = required_client_num
+
+        self.params_per_client = [None] * len(selected_client_idx)
     
-    def log(self, msg):
-        print("[Task {} - epoch {}]: {}".format(self.task_id, self.epoch, msg))
+    def log(self, *args, **kwargs):
+        print("[Task {} - epoch {}]: ".format(self.task_id, self.epoch), *args, **kwargs)
+
+    def end_of_epoch(self):
+        self.params_per_client = None
+        self.model_epoch_start = None
+
+    def select_clients(self, agent_shapley, free_client):
+        # zip([1, 2, 3], [a, b, c]) --> [(1, a), (2, b), (3, c)]
+        # enumerate([a, b, c])  --> [(1, a), (2, b), (3, c)]
+        # agent_shapley = list(enumerate(agent_shapley))
+        agent_shapley = zip(list(range(NUM_AGENT)), agent_shapley) ### shapley value of all clients, a list of (client_idx, value)
+        sorted_shapley_value = sorted(agent_shapley, key=lambda x: x[1], reverse=True)
+        self.log("Sorted shapley value: {}".format(sorted_shapley_value))
+        self.selected_client_idx = []
+        for client_idx, _ in sorted_shapley_value:
+            if free_client[client_idx] == 0:
+                self.selected_client_idx.append(client_idx)
+                if self.required_client_num and len(self.selected_client_idx) >= self.required_client_num:
+                    break
+
+        # ### !!! Select different clients for different tasks
+        # ### TODO: the agent_shapley value should be considered 
+        # ### E.g., Top-K
+        # if task.task_id == 0:
+        #     task.selected_client_idx = [0, 1, 2]
+        # else:
+        #     task.selected_client_idx = [3, 4]
+
+        ### Update the client table
+        for idx in self.selected_client_idx:
+            free_client[idx] = 1
+
+        self.log("Clients {} are selected.".format(self.selected_client_idx))
 
 if __name__ == "__main__":
     start_time = time.time()
@@ -417,17 +450,23 @@ if __name__ == "__main__":
             clients_data.append(all_client_data[idx])
         return clients_data
     
-    def train_one_round(task, round_idx, learning_rate, ckpt=False, evaluate_each_client=False):
+    def train_one_round(task, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False):
         clients_data = pick_client_based_on_index(task.selected_client_idx)
         local_models = federated_train(task.model, learning_rate, clients_data)
         
         ### Output model parameters of all selected agents of this task
         ### Store the model parameters of this round if ckpt is True
-        if ckpt:
-            for local_index in range(len(local_models)):
-                client_id = task.selected_client_idx[local_index]          
+        
+        for local_index in range(len(local_models)):
+            client_id = task.selected_client_idx[local_index]
+            if epoch == 0:
+                if task.params_per_client[client_id] is None:
+                    task.params_per_client[client_id] = []
+                task.params_per_client[client_id].append(
+                    (local_models[local_index], learning_rate))
+            if ckpt:
                 f = open(os.path.join(os.path.dirname(__file__), "weights_"+str(client_id)+".txt"),"a",encoding="utf-8")
-                for i in local_models[client_id][0]:
+                for i in local_models[local_index][0]:
                     line = ""
                     arr = list(i)
                     for j in arr:
@@ -439,7 +478,7 @@ if __name__ == "__main__":
 
                 f = open(os.path.join(os.path.dirname(__file__), "bias_" + str(client_id) + ".txt"), "a", encoding="utf-8")
                 line = ""
-                for i in local_models[client_id][1]:
+                for i in local_models[local_index][1]:
                     line += (str(i) + "\t")
                 print(line, file=f)
                 print("***" + str(learning_rate) + "***",file=f)
@@ -477,28 +516,45 @@ if __name__ == "__main__":
         task.log('round {}, loss={}\n'.format(round_idx, loss))
 
     def calculate_feedback(task):
-        
         ### TODO: comment the process to calculate the shapley value
         ### Substitute with our own algorithm
-        '''
+        
+        ### Calculate the Feedback
         gradient_weights = []
         gradient_biases = []
         gradient_lrs = []
-        for ij in task.selected_client_idx:
+
+        assert len(task.params_per_client) == NUM_AGENT
+        for client_id in range(NUM_AGENT):
+            # model_ = getParmsAndLearningRate(client_id)
+            # round_num = len(model_['learning_rate'])
+
+            params_learning_rate_list = task.params_per_client[client_id]
+            round_num = len(params_learning_rate_list)
+
             gradient_weights_local = []
             gradient_biases_local = []
             learning_rate_local = []
 
-            for i in range(len(model_['learning_rate'])):
+            for round_idx in range(round_num):
+                # _weight = model_['weights'][round_idx]
+                # _bias = model_['bias'][round_idx]
+                # _prev_weight = initial_model['weights'] if round_idx == 0 else model_['weights'][round_idx-1]
+                # _prev_bias = initial_model['bias'] if round_idx == 0 else model_['bias'][round_idx-1]
+                # _learning_rate = model_['learning_rate'][round_idx]
 
-                    gradient_weight = np.divide(np.subtract(task.model_epoch_start['weights'], task.model['weights']),
-                                                task.model['learning_rate'])
-                    gradient_bias = np.divide(np.subtract(task.model_epoch_start['bias'], task.model['bias']),
-                                            task.model['learning_rate'])
+                _weight = params_learning_rate_list[round_idx][0][0]
+                _bias = params_learning_rate_list[round_idx][0][1]
+                _prev_weight = task.model_epoch_start['weights'] if round_idx == 0 else params_learning_rate_list[round_idx-1][0][0]
+                _prev_bias = task.model_epoch_start['bias'] if round_idx == 0 else params_learning_rate_list[round_idx-1][0][1]
+                _learning_rate = params_learning_rate_list[round_idx][1]
+
+                gradient_weight = np.divide(np.subtract(_prev_weight, _weight), _learning_rate)
+                gradient_bias = np.divide(np.subtract(_prev_bias, _bias), _learning_rate)
 
                 gradient_weights_local.append(gradient_weight)
                 gradient_biases_local.append(gradient_bias)
-                learning_rate_local.append(task.model['learning_rate'][i])
+                learning_rate_local.append(_learning_rate)
 
             gradient_weights.append(gradient_weights_local)
             gradient_biases.append(gradient_biases_local)
@@ -509,7 +565,7 @@ if __name__ == "__main__":
         for s in all_sets:
             group_shapley_value.append(
                 train_with_gradient_and_valuation(s, gradient_weights, gradient_biases, gradient_lrs, DISTRIBUTION_TYPE, data_num))
-            task.log(str(s)+"\t"+str(group_shapley_value[len(group_shapley_value)-1]))
+            # task.log(str(s)+"\t"+str(group_shapley_value[len(group_shapley_value)-1]))
 
         agent_shapley = []
         for index in range(NUM_AGENT):
@@ -521,49 +577,26 @@ if __name__ == "__main__":
                         shapley += (group_shapley_value[shapley_list_indexed(j, all_sets)] - group_shapley_value[
                             remove_list_index]) / (comb(NUM_AGENT - 1, len(all_sets[remove_list_index])))
             agent_shapley.append(shapley)
-        for ag_s in agent_shapley:
-            print(ag_s)
-        task.log("end_time", time.time()-start_time)
-        '''
-        # zip([1, 2, 3], [a, b, c]) --> [(1, a), (2, b), (3, c)]
-        agent_shapley = zip(list(range(NUM_AGENT)), [1] * NUM_AGENT) ### shapley value of all clients, a list of (client_idx, value)
-        sorted_shapley_value = sorted(agent_shapley, key=lambda x: x[1], reverse=True)
-        task.selected_client_idx = []
-        for client_idx, _ in sorted_shapley_value:
-            if free_client[client_idx] == 0:
-                task.selected_client_idx.append(client_idx)
-                if task.required_client_num and len(task.selected_client_idx) >= task.required_client_num:
-                    break
+        # for ag_s in agent_shapley:
+        #     print(ag_s)
 
-        # ### !!! Select different clients for different tasks
-        # ### TODO: the agent_shapley value should be considered 
-        # ### E.g., Top-K
-        # if task.task_id == 0:
-        #     task.selected_client_idx = [0, 1, 2]
-        # else:
-        #     task.selected_client_idx = [3, 4]
-
-        ### Update the client table
-        for idx in task.selected_client_idx:
-            free_client[idx] = 1
-
-        task.log("Clients {} are selected.".format(task.selected_client_idx))
+        task.select_clients(agent_shapley, free_client)
         
     EPOCH_NUM = 10
     ### Main process of FL
     for epoch in range(EPOCH_NUM):
         task0.epoch = task1.epoch = epoch
-        for round_idx in range(2):
+        for round_idx in range(1):
             ### Train the model parameters distributedly
             #   return a list of model parameters
             #       local_models[0][0], weights of the 0-th agent
             #       local_models[0][1], bias of the 0-th agent
 
             ### Task 0
-            train_one_round(task0, round_idx, learning_rate, ckpt=False, evaluate_each_client=False)
+            train_one_round(task0, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False)
             
             ### Task1
-            train_one_round(task1, round_idx, learning_rate, ckpt=False, evaluate_each_client=False)
+            train_one_round(task1, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False)
     
             learning_rate = learning_rate * 0.9
 
@@ -572,8 +605,9 @@ if __name__ == "__main__":
         if epoch == 0:
             calculate_feedback(task0)
             calculate_feedback(task1)
-        task0.model_epoch_start = None
-        task1.model_epoch_start = None
+        
+        task0.end_of_epoch()
+        task1.end_of_epoch()
         
 
         
