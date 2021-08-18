@@ -8,6 +8,9 @@ import random
 
 import os
 
+### self-defined module
+import policy
+
 # tf.compat.v1.enable_v2_behavior()
 # tf.compat.v1.enable_eager_execution()
 
@@ -359,10 +362,10 @@ class Task:
         # enumerate([a, b, c])  --> [(1, a), (2, b), (3, c)]
         # agent_shapley = list(enumerate(agent_shapley))
         agent_shapley = zip(list(range(NUM_AGENT)), agent_shapley) ### shapley value of all clients, a list of (client_idx, value)
-        sorted_shapley_value = sorted(agent_shapley, key=lambda x: x[1], reverse=True)
-        self.log("Sorted shapley value: {}".format(sorted_shapley_value))
+        #sorted_shapley_value = sorted(agent_shapley, key=lambda x: x[1], reverse=True)
+        #self.log("Sorted shapley value: {}".format(sorted_shapley_value))
         self.selected_client_idx = []
-        for client_idx, _ in sorted_shapley_value:
+        for client_idx, _ in agent_shapley:
             if free_client[client_idx] == 0:
                 self.selected_client_idx.append(client_idx)
                 if self.required_client_num and len(self.selected_client_idx) >= self.required_client_num:
@@ -443,6 +446,13 @@ if __name__ == "__main__":
         },
         required_client_num=2
         )
+
+    quantity_list = xxx
+    cost_list = xxx
+    idlecost_list = xxx
+    client_feature_list = zip(quantity_list, cost_list, idlecost_list)
+
+    task_list = [task0, task1]
 
     def pick_client_based_on_index(selected_client_idx):
         clients_data = []
@@ -580,9 +590,10 @@ if __name__ == "__main__":
         # for ag_s in agent_shapley:
         #     print(ag_s)
 
-        task.select_clients(agent_shapley, free_client)
+        # task.select_clients(agent_shapley, free_client)
+        return agent_shapley
         
-    EPOCH_NUM = 10
+    EPOCH_NUM = 50
     ### Main process of FL
     for epoch in range(EPOCH_NUM):
         task0.epoch = task1.epoch = epoch
@@ -603,8 +614,12 @@ if __name__ == "__main__":
         ### At the end of this epoch
         ### At the first epoch, calculate the Feedback and update clients for each task
         if epoch == 0:
-            calculate_feedback(task0)
-            calculate_feedback(task1)
+            shapely_value0 = calculate_feedback(task0)
+            shapely_value1 = calculate_feedback(task1)
+            price_table = np.array([shapely_value0, shapely_value1]).T
+            task_price_list = xxx
+
+            policy.select_clients(price_table, client_feature_list, task_list, task_price_list)
         
         task0.end_of_epoch()
         task1.end_of_epoch()
