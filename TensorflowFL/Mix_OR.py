@@ -327,7 +327,19 @@ def PowerSetsBinary(items):
         set_all.append(combo)
     return set_all
 
-
+class Task:
+    def __init__(self, task_id, selected_client_idx, model, required_client_num=None):
+        self.selected_client_idx = selected_client_idx    # a list of client indexes of selected clients
+        self.model = model  # model parameters
+        self.model_epoch_start = None # model parameters at the start of an epoch
+        self.task_id = task_id
+        self.learning_rate = None
+        self.epoch = 0
+        self.required_client_num = required_client_num
+    
+    def log(self, msg):
+        print("[Task {} - epoch {}]: {}".format(self.task_id, self.epoch, msg))
+        
 if __name__ == "__main__":
     start_time = time.time()
 
@@ -342,6 +354,17 @@ if __name__ == "__main__":
     mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
 
     DISTRIBUTION_TYPE = "DIFF"
+    all_client_data_divide = None
+    all_client_data = None
+    if DISTRIBUTION_TYPE == "SAME":
+        exit(0)
+        #all_client_data_divide = [get_data_for_federated_agents(mnist_train, d) for d in range(NUM_AGENT)]
+        #test_images = readTestImagesFromFile(True)
+        #test_labels_onehot = readTestLabelsFromFile(True)
+    else:
+        all_client_data_divide = get_data_for_digit_mix(mnist_train)
+        all_client_data = all_client_data_divide
+
 
     federated_train_data_divide = None
     federated_train_data = None
@@ -365,22 +388,76 @@ if __name__ == "__main__":
     b_initial = np.asarray(b_paras, dtype=np.float32).reshape([10])
     f_ini_p.close()
 
+
     ### Initialize the global model parameters
     initial_model = {
         'weights': w_initial,
         'bias': b_initial
     }
     model = initial_model
+   
     learning_rate = 0.1
+    task0 = Task(
+        task_id = 0,
+        selected_client_idx=list(range(NUM_AGENT)),
+        model = {
+                'weights': w_initial,
+                'bias': b_initial
+        },
+        required_client_num=3)
+    task1 = Task(
+        task_id = 1,
+        selected_client_idx=list(range(NUM_AGENT)),
+        model = {
+                'weights': w_initial,
+                'bias': b_initial
+        },
+        required_client_num=2
+        )
 
     ### Main process of FL
-    for round_num in range(50):
+    def pick_client_based_on_index(selected_client_idx):
+        clients_data = []
+        for idx in selected_client_idx:
+            clients_data.append(all_client_data[idx])
+        return clients_data
+    
+
+    def train_one_round(task, round_idx, learning_rate):
+        print("love huhu")
+        clients_data = pick_client_based_on_index(task.selected_client_idx)
+        for round_num in range(5):
         ### Train the model parameters distributedly
         #   return a list of model parameters
         #       local_models[0][0], weights of the 0-th agent
         #       local_models[0][1], bias of the 0-th agent
-        local_models = federated_train(model, learning_rate, federated_train_data)
-        
+            local_models = federated_train( task.model, learning_rate, clients_data)
+
+        if ckpt:
+            for local_index in range(len(local_models)):
+                client_id = task.selected_client_idx[local_index]          
+                f = open(os.path.join(os.path.dirname(__file__), "weights_"+str(client_id)+".txt"),"a",encoding="utf-8")
+                for i in local_models[client_id][0]:
+                    line = ""
+                    arr = list(i)
+                    for j in arr:
+                        line += (str(j)+"\t")
+                    print(line, file=f)
+                print("***"+str(learning_rate)+"***",file=f)
+                print("-"*50,file=f)
+                f.close()
+
+                f = open(os.path.join(os.path.dirname(__file__), "bias_" + str(client_id) + ".txt"), "a", encoding="utf-8")
+                line = ""
+                for i in local_models[client_id][1]:
+                    line += (str(i) + "\t")
+                print(line, file=f)
+                print("***" + str(learning_rate) + "***",file=f)
+                print("-"*50,file=f)
+                f.close()
+    
+
+
         ### Output model parameters of all agents
         for local_index in range(len(local_models)):
             f = open(os.path.join(os.path.dirname(__file__), "weights_"+str(local_index)+".txt"),"a",encoding="utf-8")
@@ -401,7 +478,7 @@ if __name__ == "__main__":
             print("***" + str(learning_rate) + "***",file=f)
             print("-"*50,file=f)
             f.close()
-        
+    
         ### Calculate the global model parameters
         m_w = np.zeros([784, 10], dtype=np.float32)
         m_b = np.zeros([10], dtype=np.float32)
@@ -427,53 +504,65 @@ if __name__ == "__main__":
         loss = federated_eval(model, federated_train_data)
         print('round {}, loss={}\n'.format(round_num, loss))
         learning_rate = learning_rate * 0.9
+    
+        EPOCH_NUM = 10
+        if task.task_id == 0:
+            task.selected_client_idx=[0,1,2]
+        else:
+            task.selected_client_idx=[3,4]
+        for epoch in range(EPOCH_NUM):
+            task0.epoch = task1.epoch = epoch
+            for round_idx in range(2):
+                train_one_round(task0, round_idx, learning_rate, ckpt=False, evaluate_each_client=True)
 
-    ### Calculate the Feedback
-    gradient_weights = []
-    gradient_biases = []
-    gradient_lrs = []
-    for ij in range(NUM_AGENT):
-        model_ = getParmsAndLearningRate(ij)
-        gradient_weights_local = []
-        gradient_biases_local = []
-        learning_rate_local = []
+    
+        ### Calculate the Feedback
+        gradient_weights = []
+        gradient_biases = []
+        gradient_lrs = []
+        for ij in range(task.required_client_num):
+            model_ = getParmsAndLearningRate(ij)
+            gradient_weights_local = []
+            gradient_biases_local = []
+            learning_rate_local = []
 
-        for i in range(len(model_['learning_rate'])):
-            if i == 0:
-                gradient_weight = np.divide(np.subtract(initial_model['weights'], model_['weights'][i]),
+            for i in range(len(model_['learning_rate'])):
+                if i == 0:
+                    gradient_weight = np.divide(np.subtract(initial_model['weights'], model_['weights'][i]),
+                                                model_['learning_rate'][i])
+                    gradient_bias = np.divide(np.subtract(initial_model['bias'], model_['bias'][i]),
                                             model_['learning_rate'][i])
-                gradient_bias = np.divide(np.subtract(initial_model['bias'], model_['bias'][i]),
-                                          model_['learning_rate'][i])
-            else:
-                gradient_weight = np.divide(np.subtract(model_['weights'][i - 1], model_['weights'][i]),
+                else:
+                    gradient_weight = np.divide(np.subtract(model_['weights'][i - 1], model_['weights'][i]),
+                                                model_['learning_rate'][i])
+                    gradient_bias = np.divide(np.subtract(model_['bias'][i - 1], model_['bias'][i]),
                                             model_['learning_rate'][i])
-                gradient_bias = np.divide(np.subtract(model_['bias'][i - 1], model_['bias'][i]),
-                                          model_['learning_rate'][i])
-            gradient_weights_local.append(gradient_weight)
-            gradient_biases_local.append(gradient_bias)
-            learning_rate_local.append(model_['learning_rate'][i])
+                gradient_weights_local.append(gradient_weight)
+                gradient_biases_local.append(gradient_bias)
+                learning_rate_local.append(model_['learning_rate'][i])
 
-        gradient_weights.append(gradient_weights_local)
-        gradient_biases.append(gradient_biases_local)
-        gradient_lrs.append(learning_rate_local)
+            gradient_weights.append(gradient_weights_local)
+            gradient_biases.append(gradient_biases_local)
+            gradient_lrs.append(learning_rate_local)
 
-    all_sets = PowerSetsBinary([i for i in range(NUM_AGENT)])
-    group_shapley_value = []
-    for s in all_sets:
-        group_shapley_value.append(
-            train_with_gradient_and_valuation(s, gradient_weights, gradient_biases, gradient_lrs, DISTRIBUTION_TYPE, data_num))
-        print(str(s)+"\t"+str(group_shapley_value[len(group_shapley_value)-1]))
+        all_sets = PowerSetsBinary([i for i in range(task.required_client_num)])
+        group_shapley_value = []
+        for s in all_sets:
+            group_shapley_value.append(
+                train_with_gradient_and_valuation(s, gradient_weights, gradient_biases, gradient_lrs, DISTRIBUTION_TYPE, data_num))
+            print(str(s)+"\t"+str(group_shapley_value[len(group_shapley_value)-1]))
 
-    agent_shapley = []
-    for index in range(NUM_AGENT):
-        shapley = 0.0
-        for j in all_sets:
-            if index in j:
-                remove_list_index = remove_list_indexed(index, j, all_sets)
-                if remove_list_index != -1:
-                    shapley += (group_shapley_value[shapley_list_indexed(j, all_sets)] - group_shapley_value[
-                        remove_list_index]) / (comb(NUM_AGENT - 1, len(all_sets[remove_list_index])))
-        agent_shapley.append(shapley)
-    for ag_s in agent_shapley:
-        print(ag_s)
-    print("end_time", time.time()-start_time)
+        agent_shapley = []
+        for index in range(task.required_client_num):
+            shapley = 0.0
+            for j in all_sets:
+                if index in j:
+                    remove_list_index = remove_list_indexed(index, j, all_sets)
+                    if remove_list_index != -1:
+                        shapley += (group_shapley_value[shapley_list_indexed(j, all_sets)] - group_shapley_value[
+                            remove_list_index]) / (comb(task.required_client_num - 1, len(all_sets[remove_list_index])))
+            agent_shapley.append(shapley)
+        for ag_s in agent_shapley:
+            print(ag_s)
+        print("end_time", time.time()-start_time)
+        

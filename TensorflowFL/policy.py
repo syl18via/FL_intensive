@@ -10,7 +10,7 @@ def calcualte_client_value(price_table, client_feature_list):
     cost_list = [feature[1] for feature in client_feature_list]
     value_table = []
     for client_idx in range(len(client_feature_list)):
-        client_price_list = price_table(client_idx)
+        client_price_list = price_table[client_idx]
         value_list = [price / cost_list[client_idx] for price in  client_price_list]
         value_table.append(value_list)
     return value_table
@@ -24,7 +24,7 @@ def buyer_give_more_money(client_idx, task_idx, price_table, buyer_bid):
 
 def select_clients(price_table, client_feature_list, task_list, task_price_list):
     ''' client_feature_list: list
-            a list of (quantity, cost, idlecost)
+            a list of (cost, idlecost)
         task_list: list
             a list of class: Task
     '''
@@ -49,3 +49,4 @@ def select_clients(price_table, client_feature_list, task_list, task_price_list)
             if len(selected_client_index) >= num_of_client:
                 break
         _task.selected_client_idx = selected_client_index
+        print("Clients {} are assined to task {}".format(selected_client_index, task_idx))

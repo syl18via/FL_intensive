@@ -18,6 +18,7 @@ import policy
 BATCH_SIZE = 100
 NUM_AGENT = 5
 MIX_RATIO = 0.8
+SIMULATE = True
 
 def get_data_for_digit(source, digit):
     output_sequence = []
@@ -339,7 +340,9 @@ def PowerSetsBinary(items):
     return set_all
 
 class Task:
-    def __init__(self, task_id, selected_client_idx, model, required_client_num=None):
+    def __init__(self, task_id, selected_client_idx, model,
+            required_client_num=None,
+            bid_per_loss_delta=None):
         self.selected_client_idx = selected_client_idx    # a list of client indexes of selected clients
         self.model = model  # model parameters
         self.model_epoch_start = None # model parameters at the start of an epoch
@@ -347,7 +350,9 @@ class Task:
         self.learning_rate = None
         self.epoch = 0
         self.required_client_num = required_client_num
+        self.bid_per_loss_delta = bid_per_loss_delta
 
+        self.totoal_loss_delta = None
         self.params_per_client = [None] * len(selected_client_idx)
     
     def log(self, *args, **kwargs):
@@ -436,7 +441,8 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=3)
+        required_client_num=3,
+        bid_per_loss_delta=2)
     task1 = Task(
         task_id = 1,
         selected_client_idx=list(range(NUM_AGENT)),
@@ -444,15 +450,36 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=2
+        required_client_num=2,
+        bid_per_loss_delta=1
         )
 
-    quantity_list = xxx
-    cost_list = xxx
-    idlecost_list = xxx
-    client_feature_list = zip(quantity_list, cost_list, idlecost_list)
+
+    cost_list = []
+    for client_idx in range(NUM_AGENT):
+        cost_list.append(random.randint(1,10))
+    
+    
+    idlecost_list = []
+    for client_idx in range(NUM_AGENT):
+        idlecost_list.append(random.random())
+
+    client_feature_list = list(zip( cost_list, idlecost_list))
 
     task_list = [task0, task1]
+
+    ### Initialize the price_table
+    price_table = None
+    def init_price_table(price_table):
+        price_table = []
+        for client_idx in range(NUM_AGENT):
+            init_price_list = []
+            for taks_idx in range(len(task_list)):
+                init_price_list.append(0)
+            price_table.append(init_price_list)
+        return price_table
+    
+    price_table = init_price_table(price_table)
 
     def pick_client_based_on_index(selected_client_idx):
         clients_data = []
@@ -462,7 +489,10 @@ if __name__ == "__main__":
     
     def train_one_round(task, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False):
         clients_data = pick_client_based_on_index(task.selected_client_idx)
-        local_models = federated_train(task.model, learning_rate, clients_data)
+        if SIMULATE:
+            local_models = [(task.model['weights'], task.model['bias']) for _ in task.selected_client_idx]
+        else:
+            local_models = federated_train(task.model, learning_rate, clients_data)
         
         ### Output model parameters of all selected agents of this task
         ### Store the model parameters of this round if ckpt is True
@@ -523,7 +553,8 @@ if __name__ == "__main__":
         }
         task.learning_rate = learning_rate
         loss = federated_eval(task.model, clients_data)
-        task.log('round {}, loss={}\n'.format(round_idx, loss))
+        
+        #raise NotImplementedError("TODO, update task.total_loss_delta")
 
     def calculate_feedback(task):
         ### TODO: comment the process to calculate the shapley value
@@ -573,8 +604,12 @@ if __name__ == "__main__":
         all_sets = PowerSetsBinary([i for i in range(NUM_AGENT)])
         group_shapley_value = []
         for s in all_sets:
-            group_shapley_value.append(
-                train_with_gradient_and_valuation(s, gradient_weights, gradient_biases, gradient_lrs, DISTRIBUTION_TYPE, data_num))
+            if SIMULATE:
+                contrib = 1
+            else:
+                contrib = train_with_gradient_and_valuation(s, gradient_weights, gradient_biases, gradient_lrs, DISTRIBUTION_TYPE, data_num)
+
+            group_shapley_value.append(contrib)
             # task.log(str(s)+"\t"+str(group_shapley_value[len(group_shapley_value)-1]))
 
         agent_shapley = []
@@ -613,13 +648,29 @@ if __name__ == "__main__":
 
         ### At the end of this epoch
         ### At the first epoch, calculate the Feedback and update clients for each task
-        if epoch == 0:
-            shapely_value0 = calculate_feedback(task0)
-            shapely_value1 = calculate_feedback(task1)
-            price_table = np.array([shapely_value0, shapely_value1]).T
-            task_price_list = xxx
+        
+        print("Start to update client assignment ... ")
+        ### Update price table
+        price_table = init_price_table(price_table)
+        assert price_table is not None
 
-            policy.select_clients(price_table, client_feature_list, task_list, task_price_list)
+        shapely_value_table = [calculate_feedback(task) for task in task_list]
+        for task_idx in range(len(task_list)):
+            selected_client_index = task_list[task_idx].selected_client_idx
+            for idx in range(len(selected_client_index)):
+                client_idx = selected_client_index[idx]
+                shapley_value = shapely_value_table[task_idx][idx]
+                price_table[client_idx][task_idx] = shapley_value
+
+
+        ### TOD  
+        task_price_list = [random.random() for task in task_list]
+        ### task_price_list = [total_bid / task.required_client_num for task in task_list]
+        # total_bid_list = [task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list]
+
+        print("Start to select clients ... ")
+        policy.select_clients(price_table, client_feature_list, task_list, task_price_list)
+        print("Client assignment Done ")
         
         task0.end_of_epoch()
         task1.end_of_epoch()

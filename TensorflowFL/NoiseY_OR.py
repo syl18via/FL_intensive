@@ -8,6 +8,10 @@ from scipy.special import comb, perm
 
 import os
 
+### Self-defined module
+import policy
+
+
 # tf.compat.v1.enable_v2_behavior()
 # tf.compat.v1.enable_eager_execution()
 
