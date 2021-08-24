@@ -18,7 +18,7 @@ import policy
 BATCH_SIZE = 100
 NUM_AGENT = 5
 MIX_RATIO = 0.8
-SIMULATE = True
+SIMULATE = False
 
 def get_data_for_digit(source, digit):
     output_sequence = []
@@ -197,7 +197,7 @@ def readTestImagesFromFile(distr_same):
             if i != "":
                 tem_ret.append(float(i))
         ret.append(tem_ret)
-    return np.asarray(ret)
+    return np.asarray(ret, dtype=np.float32)
 
 def readTestLabelsFromFile(distr_same):
     ret = []
@@ -213,7 +213,7 @@ def readTestLabelsFromFile(distr_same):
             if i!="":
                 tem_ret.append(float(i))
         ret.append(tem_ret)
-    return np.asarray(ret)
+    return np.asarray(ret, dtype=np.int32)
 
 
 def getParmsAndLearningRate(agent_no):
@@ -261,37 +261,7 @@ def getParmsAndLearningRate(agent_no):
     }
     return ret
 
-
-def train_with_gradient_and_valuation(agent_list, grad, bi, lr, distr_type, datanum):
-    f_ini_p = open(os.path.join(os.path.dirname(__file__), "initial_model_parameters.txt"), "r")
-    para_lines = f_ini_p.readlines()
-    w_paras = para_lines[0].split("\t")
-    w_paras = [float(i) for i in w_paras]
-    b_paras = para_lines[1].split("\t")
-    b_paras = [float(i) for i in b_paras]
-    w_initial_g = np.asarray(w_paras, dtype=np.float32).reshape([784, 10])
-    b_initial_g = np.asarray(b_paras, dtype=np.float32).reshape([10])
-    f_ini_p.close()
-    model_g = {
-        'weights': w_initial_g,
-        'bias': b_initial_g
-    }
-    data_sum = 0
-    for i in agent_list:
-        data_sum += datanum[i]
-    agents_w = [0 for _ in range(NUM_AGENT)]
-    for i in agent_list:
-        agents_w[i] = datanum[i]/data_sum
-    for i in range(len(grad[0])):
-        # i->迭代轮数
-        gradient_w = np.zeros([784, 10], dtype=np.float32)
-        gradient_b = np.zeros([10], dtype=np.float32)
-        for j in agent_list:
-            gradient_w = np.add(np.multiply(grad[j][i], agents_w[j]), gradient_w)
-            gradient_b = np.add(np.multiply(bi[j][i], agents_w[j]), gradient_b)
-        model_g['weights'] = np.subtract(model_g['weights'], np.multiply(lr[0][i], gradient_w))
-        model_g['bias'] = np.subtract(model_g['bias'], np.multiply(lr[0][i], gradient_b))
-
+def get_test_images_labels(distr_type):
     test_images = None
     test_labels_onehot = None
     if distr_type == "SAME":
@@ -300,13 +270,7 @@ def train_with_gradient_and_valuation(agent_list, grad, bi, lr, distr_type, data
     else:
         test_images = readTestImagesFromFile(False)
         test_labels_onehot = readTestLabelsFromFile(False)
-    m = np.dot(test_images, np.asarray(model_g['weights']))
-    # print(m.shape)
-    test_result = m + np.asarray(model_g['bias'])
-    y = tf.nn.softmax(test_result)
-    correct_prediction = tf.equal(tf.argmax(y, 1), tf.arg_max(test_labels_onehot, 1))
-    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-    return accuracy.numpy()
+    return test_images, test_labels_onehot
 
 
 def remove_list_indexed(removed_ele, original_l, ll):
@@ -339,6 +303,54 @@ def PowerSetsBinary(items):
         set_all.append(combo)
     return set_all
 
+
+def weighted_average_model(local_models, all_data_num, client_index_list, evaluate_each_client):
+    ### Calculate the global model parameters by weighted averaging all local models
+    _data_num = []
+    for local_model_index in range(len(local_models)):
+        client_id = client_index_list[local_model_index]
+        _data_num.append(all_data_num[client_id])
+    _data_num = np.array(_data_num)
+    _agents_weights = np.divide(_data_num, _data_num.sum())
+
+    m_w = np.zeros([784, 10], dtype=np.float32)
+    m_b = np.zeros([10], dtype=np.float32)
+    try:
+        for local_model_index in range(len(local_models)):
+            client_id = client_index_list[local_model_index]
+            m_w = np.add(np.multiply(local_models[local_model_index][0], _agents_weights[local_model_index]), m_w)
+            m_b = np.add(np.multiply(local_models[local_model_index][1], _agents_weights[local_model_index]), m_b)
+
+            if evaluate_each_client:
+            ### Evaluate the model parameters of current agent if `evaluate_each_client` is True
+                loss = evaluate_on_server(
+                    {
+                    'weights': local_models[local_model_index][0],
+                    'bias': local_models[local_model_index][1]
+                    }, 
+                    test_data)
+                print(' - agent {}, loss={}'.format(client_id, loss))
+    except:
+        import code
+        code.interact(local=locals())
+        
+    return {'weights': m_w, "bias": m_b}
+
+
+def train_with_gradient_and_valuation(task, client_set, test_data, all_data_num):
+    test_images, test_labels_onehot = test_data
+    client_index_list = []
+    local_models = []
+    for idx in client_set:
+        client_index_list.append(task.selected_client_idx[idx])
+        local_models.append(task.params_per_client[idx][0])
+    model = weighted_average_model(local_models, all_data_num, client_index_list, False)
+    test_result = np.dot(test_images, task.model['weights']) + task.model['bias']
+    y = tf.nn.softmax(test_result)
+    correct_prediction = tf.equal(tf.argmax(y, 1), tf.arg_max(test_labels_onehot, 1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+    return accuracy.numpy()
+
 class Task:
     def __init__(self, task_id, selected_client_idx, model,
             required_client_num=None,
@@ -352,8 +364,9 @@ class Task:
         self.required_client_num = required_client_num
         self.bid_per_loss_delta = bid_per_loss_delta
 
+        self.prev_loss = None
         self.totoal_loss_delta = None
-        self.params_per_client = [None] * len(selected_client_idx)
+        self.params_per_client = None
     
     def log(self, *args, **kwargs):
         print("[Task {} - epoch {}]: ".format(self.task_id, self.epoch), *args, **kwargs)
@@ -404,7 +417,6 @@ if __name__ == "__main__":
     mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
 
     DISTRIBUTION_TYPE = "DIFF"
-
     all_client_data_divide = None
     all_client_data = None
     if DISTRIBUTION_TYPE == "SAME":
@@ -415,7 +427,21 @@ if __name__ == "__main__":
     else:
         all_client_data_divide = get_data_for_digit_mix(mnist_train)
         all_client_data = all_client_data_divide
+    test_data = get_test_images_labels(DISTRIBUTION_TYPE)
+
+    def pick_client_based_on_index(selected_client_idx):
+        clients_data = []
+        for idx in selected_client_idx:
+            clients_data.append(all_client_data[idx])
+        return clients_data
     
+    def evaluate_on_server(model, test_batch):
+        predicted_y = tf.nn.softmax(tf.matmul(test_batch[0], model["weights"]) + model["bias"])
+        label = test_batch[1]
+        if len(np.shape(label)) == 1:
+            label = tf.one_hot(label, 10)
+        return -tf.reduce_mean(tf.reduce_sum(label * tf.math.log(predicted_y), axis=[1]))
+
     ### 0 denotes free, 1 denotes being occupied
     free_client = [0] * NUM_AGENT
     
@@ -434,26 +460,39 @@ if __name__ == "__main__":
 
     ### Initialize the global model parameters for both tasks
     ### At the first epoch, both tasks select all clients
-    task0 = Task(
+    
+    task_list = []
+    def create_task(task_id, selected_client_idx, init_model, required_client_num, bid_per_loss_delta):
+        task = Task(
+            task_id = task_id,
+            selected_client_idx=selected_client_idx,
+            model = init_model,
+            required_client_num=required_client_num,
+            bid_per_loss_delta=bid_per_loss_delta)
+        task_list.append(task)
+
+        ### Init the loss
+        task.prev_loss = evaluate_on_server(task.model, test_data)
+
+    create_task(
         task_id = 0,
         selected_client_idx=list(range(NUM_AGENT)),
-        model = {
+        init_model = {
                 'weights': w_initial,
                 'bias': b_initial
         },
         required_client_num=3,
         bid_per_loss_delta=2)
-    task1 = Task(
+    create_task(
         task_id = 1,
         selected_client_idx=list(range(NUM_AGENT)),
-        model = {
+        init_model = {
                 'weights': w_initial,
                 'bias': b_initial
         },
         required_client_num=2,
         bid_per_loss_delta=1
         )
-
 
     cost_list = []
     for client_idx in range(NUM_AGENT):
@@ -465,8 +504,6 @@ if __name__ == "__main__":
         idlecost_list.append(random.random())
 
     client_feature_list = list(zip( cost_list, idlecost_list))
-
-    task_list = [task0, task1]
 
     ### Initialize the price_table
     price_table = None
@@ -480,15 +517,12 @@ if __name__ == "__main__":
         return price_table
     
     price_table = init_price_table(price_table)
-
-    def pick_client_based_on_index(selected_client_idx):
-        clients_data = []
-        for idx in selected_client_idx:
-            clients_data.append(all_client_data[idx])
-        return clients_data
     
     def train_one_round(task, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False):
         clients_data = pick_client_based_on_index(task.selected_client_idx)
+        task.params_per_client = [None] * len(task.selected_client_idx)
+
+        ### Train
         if SIMULATE:
             local_models = [(task.model['weights'], task.model['bias']) for _ in task.selected_client_idx]
         else:
@@ -496,14 +530,14 @@ if __name__ == "__main__":
         
         ### Output model parameters of all selected agents of this task
         ### Store the model parameters of this round if ckpt is True
-        
         for local_index in range(len(local_models)):
             client_id = task.selected_client_idx[local_index]
-            if epoch == 0:
-                if task.params_per_client[client_id] is None:
-                    task.params_per_client[client_id] = []
-                task.params_per_client[client_id].append(
-                    (local_models[local_index], learning_rate))
+            # if epoch == 0:
+            #     if task.params_per_client[local_index] is None:
+            #         task.params_per_client[local_index] = []
+            #     task.params_per_client[local_index].append(
+            #         (local_models[local_index], learning_rate))
+            task.params_per_client[local_index] = (local_models[local_index], learning_rate)
             if ckpt:
                 f = open(os.path.join(os.path.dirname(__file__), "weights_"+str(client_id)+".txt"),"a",encoding="utf-8")
                 for i in local_models[local_index][0]:
@@ -525,35 +559,21 @@ if __name__ == "__main__":
                 print("-"*50,file=f)
                 f.close()
         
-        ### Calculate the global model parameters
-        m_w = np.zeros([784, 10], dtype=np.float32)
-        m_b = np.zeros([10], dtype=np.float32)
-        task.log("Round {} at {:.3f} s, learning rate: {:.3f}".format(round_idx, time.time()-start_time, learning_rate))
-        for local_model_index in range(len(local_models)):
-            client_id = task.selected_client_idx[local_model_index] 
-            m_w = np.add(np.multiply(local_models[local_model_index][0], agents_weights[local_model_index]), m_w)
-            m_b = np.add(np.multiply(local_models[local_model_index][1], agents_weights[local_model_index]), m_b)
-
-            if evaluate_each_client:
-            ### Evaluate the model parameters of current agent if `evaluate_each_client` is True
-                loss = federated_eval(
-                    {
-                    'weights': local_models[local_model_index][0],
-                    'bias': local_models[local_model_index][1]
-                    }, 
-                    clients_data)
-                print(' - agent {}, loss={}'.format(client_id, loss))
-        
-        ### Update the global model parameters
+        ### Store the model before updating
         if task.model_epoch_start is None:
             task.model_epoch_start = task.model
-        task.model = {
-                'weights': m_w,
-                'bias': m_b
-        }
+
+        ### Update the global model parameters
+        task.model = weighted_average_model(local_models, data_num, task.selected_client_idx, evaluate_each_client)
         task.learning_rate = learning_rate
-        loss = federated_eval(task.model, clients_data)
-        
+
+        ### evaluate the loss
+        loss = evaluate_on_server(task.model, test_data)
+        task.totoal_loss_delta = task.prev_loss - loss
+        task.prev_loss = loss
+        task.log("Round {} at {:.3f} s, learning rate: {:.3f}, loss: {:.3f}, loss_delta: {:.3f}".format(
+            round_idx, time.time()-start_time, learning_rate, loss, task.totoal_loss_delta))
+
         #raise NotImplementedError("TODO, update task.total_loss_delta")
 
     def calculate_feedback(task):
@@ -561,66 +581,23 @@ if __name__ == "__main__":
         ### Substitute with our own algorithm
         
         ### Calculate the Feedback
-        gradient_weights = []
-        gradient_biases = []
-        gradient_lrs = []
-
-        assert len(task.params_per_client) == NUM_AGENT
-        for client_id in range(NUM_AGENT):
-            # model_ = getParmsAndLearningRate(client_id)
-            # round_num = len(model_['learning_rate'])
-
-            params_learning_rate_list = task.params_per_client[client_id]
-            round_num = len(params_learning_rate_list)
-
-            gradient_weights_local = []
-            gradient_biases_local = []
-            learning_rate_local = []
-
-            for round_idx in range(round_num):
-                # _weight = model_['weights'][round_idx]
-                # _bias = model_['bias'][round_idx]
-                # _prev_weight = initial_model['weights'] if round_idx == 0 else model_['weights'][round_idx-1]
-                # _prev_bias = initial_model['bias'] if round_idx == 0 else model_['bias'][round_idx-1]
-                # _learning_rate = model_['learning_rate'][round_idx]
-
-                _weight = params_learning_rate_list[round_idx][0][0]
-                _bias = params_learning_rate_list[round_idx][0][1]
-                _prev_weight = task.model_epoch_start['weights'] if round_idx == 0 else params_learning_rate_list[round_idx-1][0][0]
-                _prev_bias = task.model_epoch_start['bias'] if round_idx == 0 else params_learning_rate_list[round_idx-1][0][1]
-                _learning_rate = params_learning_rate_list[round_idx][1]
-
-                gradient_weight = np.divide(np.subtract(_prev_weight, _weight), _learning_rate)
-                gradient_bias = np.divide(np.subtract(_prev_bias, _bias), _learning_rate)
-
-                gradient_weights_local.append(gradient_weight)
-                gradient_biases_local.append(gradient_bias)
-                learning_rate_local.append(_learning_rate)
-
-            gradient_weights.append(gradient_weights_local)
-            gradient_biases.append(gradient_biases_local)
-            gradient_lrs.append(learning_rate_local)
-
-        all_sets = PowerSetsBinary([i for i in range(NUM_AGENT)])
+        selected_client_num = len(task.selected_client_idx)
+        all_sets = PowerSetsBinary([i for i in range(selected_client_num)])
         group_shapley_value = []
         for s in all_sets:
-            if SIMULATE:
-                contrib = 1
-            else:
-                contrib = train_with_gradient_and_valuation(s, gradient_weights, gradient_biases, gradient_lrs, DISTRIBUTION_TYPE, data_num)
-
+            contrib = train_with_gradient_and_valuation(task, s, test_data, data_num)
             group_shapley_value.append(contrib)
             # task.log(str(s)+"\t"+str(group_shapley_value[len(group_shapley_value)-1]))
 
         agent_shapley = []
-        for index in range(NUM_AGENT):
+        for index in range(selected_client_num):
             shapley = 0.0
             for j in all_sets:
                 if index in j:
                     remove_list_index = remove_list_indexed(index, j, all_sets)
                     if remove_list_index != -1:
                         shapley += (group_shapley_value[shapley_list_indexed(j, all_sets)] - group_shapley_value[
-                            remove_list_index]) / (comb(NUM_AGENT - 1, len(all_sets[remove_list_index])))
+                            remove_list_index]) / (comb(selected_client_num - 1, len(all_sets[remove_list_index])))
             agent_shapley.append(shapley)
         # for ag_s in agent_shapley:
         #     print(ag_s)
@@ -631,19 +608,18 @@ if __name__ == "__main__":
     EPOCH_NUM = 50
     ### Main process of FL
     for epoch in range(EPOCH_NUM):
-        task0.epoch = task1.epoch = epoch
+        for task in task_list:
+            task.epoch = epoch
+
         for round_idx in range(1):
             ### Train the model parameters distributedly
             #   return a list of model parameters
             #       local_models[0][0], weights of the 0-th agent
             #       local_models[0][1], bias of the 0-th agent
 
-            ### Task 0
-            train_one_round(task0, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False)
+            for task in task_list:
+                train_one_round(task, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False)
             
-            ### Task1
-            train_one_round(task1, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False)
-    
             learning_rate = learning_rate * 0.9
 
         ### At the end of this epoch
@@ -672,8 +648,8 @@ if __name__ == "__main__":
         policy.select_clients(price_table, client_feature_list, task_list, task_price_list)
         print("Client assignment Done ")
         
-        task0.end_of_epoch()
-        task1.end_of_epoch()
+        for task in task_list:
+            task.end_of_epoch()
         
 
         
