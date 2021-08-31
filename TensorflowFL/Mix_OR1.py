@@ -5,18 +5,24 @@ import numpy as np
 import time
 from scipy.special import comb, perm
 import random
+import argparse
+import json
 
 import os
 
 ### self-defined module
 import policy
 
+parser = argparse.ArgumentParser(description='FL')
+parser.add_argument("--policy", type=str, default="my", help="Client Assignment Policy")
+args = parser.parse_args()
+
 # tf.compat.v1.enable_v2_behavior()
 # tf.compat.v1.enable_eager_execution()
 
 # NUM_EXAMPLES_PER_USER = 1000
 BATCH_SIZE = 100
-NUM_AGENT = 5
+NUM_AGENT = 10
 MIX_RATIO = 0.8
 SIMULATE = False
 
@@ -53,10 +59,10 @@ def get_data_for_digit_mix(source):
     for label, indexs in enumerate(label2indexs):
         left =0
         for agent_id in range(NUM_AGENT):
-            if label == agent_id*2 or label == agent_id*2+1:
-                for sample_index in range(left, left+int(len(indexs)*0.8)):
+            if label == agent_id:
+                for sample_index in range(left, left+int(len(indexs)*0.4)):
                     all_samples[agent_id].append(indexs[sample_index])
-                left=left+int(len(indexs)*0.8)
+                left=left+int(len(indexs)*0.4)
             else:
                 for sample_index in range(left, left + int(len(indexs) * 0.05)):
                     all_samples[agent_id].append(indexs[sample_index])
@@ -64,13 +70,75 @@ def get_data_for_digit_mix(source):
 
     ### Constuct batched dataset and normalize x
     for agent_id, sample_idxs in enumerate(all_samples):
+        ### shuffle
+        sample_idxs = np.array(sample_idxs)
+        # np.random.shuffle(sample_idxs)
+
         for i in range(0, len(sample_idxs), BATCH_SIZE):
             batch_sample_idxs = sample_idxs[i:i + BATCH_SIZE]
             output_sequence[agent_id].append({
                 'x': np.array([source[0][idx].flatten() / 255.0 for idx in batch_sample_idxs],
                               dtype=np.float32),
                 'y': np.array([source[1][idx] for idx in batch_sample_idxs], dtype=np.int32)})
-    return output_sequence
+    
+    def iterator(agent_id):
+        while True:
+            for batch in output_sequence[agent_id]:
+                yield batch
+                
+    all_data = [iterator(agent_id) for agent_id in range(NUM_AGENT)]
+    return all_data
+
+NOISE_STEP = 0.05
+rand_index = []
+rand_label = []
+
+def get_data_for_digit_noiseY(source):
+    output_sequence = [[] for _ in range(NUM_AGENT)]
+    Samples = []
+    for digit in range(0, 10):
+        samples = [i for i, d in enumerate(source[1]) if d == digit]
+        samples = samples[0:5421]
+        Samples.append(samples)
+
+    for client_id, sequence_per_client in enumerate(output_sequence):
+        all_samples = []
+        for sample in Samples:
+            for sample_index in range(int(client_id * (len(sample) / NUM_AGENT)), int((client_id + 1) * (len(sample) / NUM_AGENT))):
+                all_samples.append(sample[sample_index])
+
+        # all_samples = [i for i in range(int(client_id*(len(source[1])/NUM_AGENT)), int((client_id+1)*(len(source[1])/NUM_AGENT)))]
+        for i in range(0, len(all_samples), BATCH_SIZE):
+            batch_samples = all_samples[i:i + BATCH_SIZE]
+            sequence_per_client.append({
+                'x': np.array([source[0][i].flatten() / 255.0 for i in batch_samples],
+                            dtype=np.float32),
+                'y': np.array([source[1][i] for i in batch_samples], dtype=np.int32)})
+        # add noise 0%-40%
+        ratio = NOISE_STEP * (client_id)
+        sum_agent = int(len(all_samples))
+
+        #TODO: write random list into file and change randint to a number
+        noiseList = rand_index[client_id][0:int(ratio*sum_agent)]
+        noiseLabel = rand_label[client_id][0:int(ratio*sum_agent)]
+        # noiseList = random.sample(range(0, sum_agent), int(ratio*sum_agent))
+        # noiseLabel = []
+        index = 0
+        for i in noiseList:
+            # noiseHere = random.randint(1, 9)
+            # noiseLabel.append(noiseHere)
+            noiseHere = noiseLabel[index]
+            index = index + 1
+            sequence_per_client[int(i/BATCH_SIZE)]['y'][i % BATCH_SIZE] = (
+                sequence_per_client[int(i/BATCH_SIZE)]['y'][i % BATCH_SIZE]+noiseHere) % 10
+
+    def iterator(agent_id):
+        while True:
+            for batch in output_sequence[agent_id]:
+                yield batch
+                
+    all_data = [iterator(agent_id) for agent_id in range(NUM_AGENT)]
+    return all_data
 
 def get_data_for_digit_test(source, digit):
     output_sequence = []
@@ -345,7 +413,7 @@ def train_with_gradient_and_valuation(task, client_set, test_data, all_data_num)
         client_index_list.append(task.selected_client_idx[idx])
         local_models.append(task.params_per_client[idx][0])
     model = weighted_average_model(local_models, all_data_num, client_index_list, False)
-    test_result = np.dot(test_images, task.model['weights']) + task.model['bias']
+    test_result = np.dot(test_images, model['weights']) + model['bias']
     y = tf.nn.softmax(test_result)
     correct_prediction = tf.equal(tf.argmax(y, 1), tf.arg_max(test_labels_onehot, 1))
     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
@@ -432,7 +500,7 @@ if __name__ == "__main__":
     def pick_client_based_on_index(selected_client_idx):
         clients_data = []
         for idx in selected_client_idx:
-            clients_data.append(all_client_data[idx])
+            clients_data.append([next(all_client_data[idx])])
         return clients_data
     
     def evaluate_on_server(model, test_batch):
@@ -481,8 +549,8 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=3,
-        bid_per_loss_delta=2)
+        required_client_num=4,
+        bid_per_loss_delta=50)
     create_task(
         task_id = 1,
         selected_client_idx=list(range(NUM_AGENT)),
@@ -490,18 +558,19 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=2,
-        bid_per_loss_delta=1
+        required_client_num=5,
+        bid_per_loss_delta=40
         )
 
     cost_list = []
     for client_idx in range(NUM_AGENT):
-        cost_list.append(random.randint(1,10))
+        # cost_list.append(random.randint(1,10)/10)
+        cost_list.append(0)
     
     
     idlecost_list = []
     for client_idx in range(NUM_AGENT):
-        idlecost_list.append(random.random())
+        idlecost_list.append(0)
 
     client_feature_list = list(zip( cost_list, idlecost_list))
 
@@ -569,7 +638,7 @@ if __name__ == "__main__":
 
         ### evaluate the loss
         loss = evaluate_on_server(task.model, test_data)
-        task.totoal_loss_delta = task.prev_loss - loss
+        task.totoal_loss_delta = float(task.prev_loss - loss)
         task.prev_loss = loss
         task.log("Round {} at {:.3f} s, learning rate: {:.3f}, loss: {:.3f}, loss_delta: {:.3f}".format(
             round_idx, time.time()-start_time, learning_rate, loss, task.totoal_loss_delta))
@@ -592,12 +661,13 @@ if __name__ == "__main__":
         agent_shapley = []
         for index in range(selected_client_num):
             shapley = 0.0
-            for j in all_sets:
+            for set_idx, j in enumerate(all_sets):
                 if index in j:
                     remove_list_index = remove_list_indexed(index, j, all_sets)
                     if remove_list_index != -1:
-                        shapley += (group_shapley_value[shapley_list_indexed(j, all_sets)] - group_shapley_value[
+                        shapley += (group_shapley_value[set_idx] - group_shapley_value[
                             remove_list_index]) / (comb(selected_client_num - 1, len(all_sets[remove_list_index])))
+
             agent_shapley.append(shapley)
         # for ag_s in agent_shapley:
         #     print(ag_s)
@@ -607,6 +677,8 @@ if __name__ == "__main__":
         
     EPOCH_NUM = 50
     ### Main process of FL
+    total_reward_list = []
+    reward_sum=[]
     for epoch in range(EPOCH_NUM):
         for task in task_list:
             task.epoch = epoch
@@ -626,30 +698,68 @@ if __name__ == "__main__":
         ### At the first epoch, calculate the Feedback and update clients for each task
         
         print("Start to update client assignment ... ")
-        ### Update price table
-        price_table = init_price_table(price_table)
-        assert price_table is not None
 
+        total_bid = sum([task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list])
+        total_cost = 0
+        
+        for task in task_list:
+            for client_idx in task.selected_client_idx :
+                total_cost += cost_list[client_idx]
+        if epoch > 0:       
+            total_reward = total_bid - total_cost
+            total_reward_list.append(total_reward)
+            reward_sum.append(sum(total_reward_list))
+            print(reward_sum[-1])
+        
         shapely_value_table = [calculate_feedback(task) for task in task_list]
+        ### Normalize by task
+        shapely_value_table = [np.array(s_list) / (sum(s_list) if sum(s_list) !=0 else 0.1) for s_list in shapely_value_table]
+
+        ### Update price table
         for task_idx in range(len(task_list)):
             selected_client_index = task_list[task_idx].selected_client_idx
             for idx in range(len(selected_client_index)):
                 client_idx = selected_client_index[idx]
                 shapley_value = shapely_value_table[task_idx][idx]
-                price_table[client_idx][task_idx] = shapley_value
+                shapely_value_scaled = shapley_value * len(selected_client_index) / NUM_AGENT
+                price_table[client_idx][task_idx] = (epoch / (epoch + 1)) * price_table[client_idx][task_idx] + (1 / (epoch + 1)) * shapely_value_scaled 
+
+        assert price_table is not None
+    
+        ### Update bid table
+        bid_table = np.zeros((NUM_AGENT, len(task_list)))
+
+        for task_idx in range(len(task_list)):
+            selected_client_index = task_list[task_idx].selected_client_idx
+            for idx in range(len(selected_client_index)):
+                client_idx = selected_client_index[idx]
+                shapley_value = shapely_value_table[task_idx][idx]
+                bid_table[client_idx][task_idx] = shapley_value * total_bid
 
 
-        ### TOD  
-        task_price_list = [random.random() for task in task_list]
-        ### task_price_list = [total_bid / task.required_client_num for task in task_list]
-        # total_bid_list = [task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list]
+        # reward_list = [task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list]
+
+        
+        
+        # reward_list = [task.totoal_loss_delta * task.bid_per_loss_delta - total_cost for task in task_list]
+        
+
+        #print ('reward list', reward_list)
 
         print("Start to select clients ... ")
-        policy.select_clients(price_table, client_feature_list, task_list, task_price_list)
+        if args.policy == "my":
+            policy.my_select_clients(price_table, client_feature_list, task_list, bid_table)
+        elif args.policy == "simple":
+            policy.random_select_clients(task_list,NUM_AGENT)
+        else:
+            raise
+
         print("Client assignment Done ")
         
         for task in task_list:
             task.end_of_epoch()
-        
 
-        
+    ### end of trianing
+    with open("total_reward_list_{}.json".format(args.policy), 'w') as fp:
+        json.dump({"total_reward)=_list": total_reward_list}, fp, indent=4)
+    print(reward_sum)
