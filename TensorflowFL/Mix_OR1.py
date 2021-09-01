@@ -13,7 +13,7 @@ import os
 ### self-defined module
 import policy
 
-parser = argparse.ArgumentParser(description='FL')
+parser = argparse.ArgumentParser(description='FL')parser.add_argument("--distribution", type=str, default="mix", help="Data distribution")
 parser.add_argument("--policy", type=str, default="my", help="Client Assignment Policy")
 args = parser.parse_args()
 
@@ -93,44 +93,38 @@ NOISE_STEP = 0.05
 rand_index = []
 rand_label = []
 
-def get_data_for_digit_noiseY(source):
-    output_sequence = [[] for _ in range(NUM_AGENT)]
+
+def get_data_for_digit_noiseY(source, num):
+    output_sequence = []
+
     Samples = []
     for digit in range(0, 10):
         samples = [i for i, d in enumerate(source[1]) if d == digit]
         samples = samples[0:5421]
         Samples.append(samples)
 
-    for client_id, sequence_per_client in enumerate(output_sequence):
-        all_samples = []
-        for sample in Samples:
-            for sample_index in range(int(client_id * (len(sample) / NUM_AGENT)), int((client_id + 1) * (len(sample) / NUM_AGENT))):
-                all_samples.append(sample[sample_index])
+    all_samples = []
+    for sample in Samples:
+        for sample_index in range(int(num * (len(sample) / NUM_AGENT)), int((num + 1) * (len(sample) / NUM_AGENT))):
+            all_samples.append(sample[sample_index])
 
-        # all_samples = [i for i in range(int(client_id*(len(source[1])/NUM_AGENT)), int((client_id+1)*(len(source[1])/NUM_AGENT)))]
-        for i in range(0, len(all_samples), BATCH_SIZE):
-            batch_samples = all_samples[i:i + BATCH_SIZE]
-            sequence_per_client.append({
-                'x': np.array([source[0][i].flatten() / 255.0 for i in batch_samples],
-                            dtype=np.float32),
-                'y': np.array([source[1][i] for i in batch_samples], dtype=np.int32)})
-        # add noise 0%-40%
-        ratio = NOISE_STEP * (client_id)
-        sum_agent = int(len(all_samples))
+    # all_samples = [i for i in range(int(num*(len(source[1])/NUM_AGENT)), int((num+1)*(len(source[1])/NUM_AGENT)))]
 
-        #TODO: write random list into file and change randint to a number
-        noiseList = rand_index[client_id][0:int(ratio*sum_agent)]
-        noiseLabel = rand_label[client_id][0:int(ratio*sum_agent)]
-        # noiseList = random.sample(range(0, sum_agent), int(ratio*sum_agent))
-        # noiseLabel = []
-        index = 0
-        for i in noiseList:
-            # noiseHere = random.randint(1, 9)
-            # noiseLabel.append(noiseHere)
-            noiseHere = noiseLabel[index]
-            index = index + 1
-            sequence_per_client[int(i/BATCH_SIZE)]['y'][i % BATCH_SIZE] = (
-                sequence_per_client[int(i/BATCH_SIZE)]['y'][i % BATCH_SIZE]+noiseHere) % 10
+    for i in range(0, len(all_samples), BATCH_SIZE):
+        batch_samples = all_samples[i:i + BATCH_SIZE]
+        output_sequence.append({
+            'x': np.array([source[0][i].flatten() / 255.0 for i in batch_samples],
+                          dtype=np.float32),
+            'y': np.array([source[1][i] for i in batch_samples], dtype=np.int32)})
+    # add noise 0x-0.2x
+    ratio = num * 0.05
+    sum_agent = int(len(all_samples))
+    index = 0
+    for i in range(0, sum_agent):
+        noiseHere = ratio * np.random.randn(28*28)
+        output_sequence[int(i/BATCH_SIZE)]['x'][i % BATCH_SIZE] = checkRange(np.add(
+            output_sequence[int(i/BATCH_SIZE)]['x'][i % BATCH_SIZE], noiseHere)) % 10
+    return output_sequence
 
     def iterator(agent_id):
         while True:
@@ -493,7 +487,12 @@ if __name__ == "__main__":
         #test_images = readTestImagesFromFile(True)
         #test_labels_onehot = readTestLabelsFromFile(True)
     else:
-        all_client_data_divide = get_data_for_digit_mix(mnist_train)
+        if args.distribution.lower() == "mix":
+            all_client_data_divide = get_data_for_digit_mix(mnist_train)
+        elif args.distribution.lower() == "noisey":
+            all_client_data_divide = get_data_for_digit_noiseY(mnist_train)
+        else:
+            raise ValueError("Not implemented data distribution {}".format(args.distribution))
         all_client_data = all_client_data_divide
     test_data = get_test_images_labels(DISTRIBUTION_TYPE)
 
