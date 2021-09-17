@@ -167,20 +167,6 @@ def get_data_for_digit_noiseX(source):
         samples = samples[0:5421]
         Samples.append(samples)
     
-    for client_id, sample_idxs in enumerate(output_sequence_full):
-        all_samples = []
-        for sample in Samples:
-            for sample_index in range(int(client_id * (len(sample) / NUM_AGENT)), int((client_id + 1) * (len(sample) / NUM_AGENT))):
-                all_samples.append(sample[sample_index])
-
-        # all_samples = [i for i in range(int(num*(len(source[1])/NUM_AGENT)), int((num+1)*(len(source[1])/NUM_AGENT)))]
-        sample_idxs = np.array(sample_idxs)
-        # np.random.shuffle(sample_idxs)
-        output_sequence_full[client_id].append({
-                'x': np.array([source[0][idx].flatten() / 255.0 for idx in sample_idxs],
-                              dtype=np.float32),
-                'y': np.array([source[1][idx] for idx in sample_idxs], dtype=np.int32)})
-
     for client_id, sequence_per_client in enumerate(output_sequence):
         all_samples = []
         for sample in Samples:
@@ -188,6 +174,10 @@ def get_data_for_digit_noiseX(source):
                 all_samples.append(sample[sample_index])
 
         # all_samples = [i for i in range(int(num*(len(source[1])/NUM_AGENT)), int((num+1)*(len(source[1])/NUM_AGENT)))]
+        output_sequence_full[client_id].append({
+                'x': np.array([source[0][idx].flatten() / 255.0 for idx in all_samples],
+                              dtype=np.float32),
+                'y': np.array([source[1][idx] for idx in all_samples], dtype=np.int32)})
 
         for i in range(0, len(all_samples), BATCH_SIZE):
             batch_samples = all_samples[i:i + BATCH_SIZE]
@@ -211,7 +201,7 @@ def get_data_for_digit_noiseX(source):
                 yield batch
                 
     all_data = [iterator(agent_id) for agent_id in range(NUM_AGENT)]
-    return all_data,output_sequence_full
+    return all_data, output_sequence_full
 
 
 def get_data_for_digit_test(source, digit):
