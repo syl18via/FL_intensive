@@ -620,8 +620,8 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=4,
-        bid_per_loss_delta=50)
+        required_client_num=3,
+        bid_per_loss_delta=1)
     create_task(
         task_id = 1,
         selected_client_idx=list(range(NUM_AGENT)),
@@ -629,8 +629,8 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=5,
-        bid_per_loss_delta=40
+        required_client_num=3,
+        bid_per_loss_delta=1
         )
 
     cost_list = []
@@ -709,7 +709,7 @@ if __name__ == "__main__":
 
         ### evaluate the loss
         loss = evaluate_on_server(task.model, test_data)
-        task.totoal_loss_delta = float(task.prev_loss - loss)
+        task.totoal_loss_delta = 1000*float(task.prev_loss - loss)
         task.prev_loss = loss
         task.log("Round {} at {:.3f} s, learning rate: {:.3f}, loss: {:.3f}, loss_delta: {:.3f}".format(
             round_idx, time.time()-start_time, learning_rate, loss, task.totoal_loss_delta))
@@ -770,7 +770,8 @@ if __name__ == "__main__":
         
         print("Start to update client assignment ... ")
 
-        total_bid = sum([task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list])
+        bid_list = [task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list]
+        total_bid = sum(bid_list)
         total_cost = 0
         
         for task in task_list:
@@ -805,7 +806,7 @@ if __name__ == "__main__":
             for idx in range(len(selected_client_index)):
                 client_idx = selected_client_index[idx]
                 shapley_value = shapely_value_table[task_idx][idx]
-                bid_table[client_idx][task_idx] = shapley_value * total_bid
+                bid_table[client_idx][task_idx] = shapley_value * bid_list[task_idx]
 
 
         # reward_list = [task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list]
