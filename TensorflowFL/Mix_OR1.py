@@ -17,6 +17,7 @@ from dataloader import *
 parser = argparse.ArgumentParser(description='FL')
 parser.add_argument("--distribution", type=str, default="mix", help="Data distribution")
 parser.add_argument("--policy", type=str, default="my", help="Client Assignment Policy")
+parser.add_argument("--trade_once", action="store_true", help="Set to update clients selection only after the first epoch")
 args = parser.parse_args()
 
 # tf.compat.v1.enable_v2_behavior()
@@ -365,7 +366,7 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=2,
+        required_client_num=1,
         bid_per_loss_delta=1)
 
     create_task(
@@ -375,7 +376,7 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=2,
+        required_client_num=1,
         bid_per_loss_delta=1
         )
 
@@ -550,7 +551,7 @@ if __name__ == "__main__":
                 client_idx = selected_client_index[idx]
                 shapley_value = shapely_value_table[task_idx][idx]
                 shapely_value_scaled = shapley_value * len(selected_client_index) / NUM_AGENT
-                price_table[client_idx][task_idx] = (epoch / (epoch + 1)) * price_table[client_idx][task_idx] + (1 / (epoch + 1)) * shapely_value_scaled 
+                price_table[client_idx][task_idx] =1.2*((epoch / (epoch + 1)) * price_table[client_idx][task_idx] + (1 / (epoch + 1)) * shapely_value_scaled) 
 
         assert price_table is not None
     
@@ -575,13 +576,18 @@ if __name__ == "__main__":
         #print ('reward list', reward_list)
 
         print("Start to select clients ... ")
-        if args.policy == "my":
-            policy.my_select_clients(price_table, client_feature_list, task_list, bid_table)
-        elif args.policy == "simple":
-            policy.random_select_clients(task_list,NUM_AGENT)
-        else:
-            raise
-
+        if epoch == 0 or not args.trade_once:
+            if args.policy == "my":
+                policy.my_select_clients(price_table, client_feature_list, task_list, bid_table)
+            elif args.policy == "random":
+                policy.random_select_clients(task_list,NUM_AGENT)
+            elif args.policy == "simple":
+                policy.simple_select_clients(task_list,NUM_AGENT)
+            elif args.policy == "mcafee":
+                if epoch == 0:
+                    policy.mcafee_select_clients(price_table, client_feature_list, task_list, bid_table)
+            else:
+                raise
         print("Client assignment Done ")
         
         for task in task_list:
