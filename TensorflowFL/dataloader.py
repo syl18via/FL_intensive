@@ -85,6 +85,72 @@ def get_data_for_digit_mix(source):
     all_data = [iterator(agent_id) for agent_id in range(NUM_AGENT)]
     return all_data, output_sequence_full
 
+def get_data_for_digit_mix2(source):
+
+    output_sequence = [[] for _ in range(NUM_AGENT)]
+    output_sequence_full = [[] for _ in range(NUM_AGENT)]
+    # print(source[0].shape, source[1].shape)
+    # (60000, 28, 28) (60000,)
+
+    ### Samples is a list, each element is a list of sample indexs
+    ### E.g, Samples[i] is the list of indexs whose label is i
+    label2indexs = []
+    for digit in range(0, 10):
+        indexs = [i for i, label in enumerate(source[1]) if label == digit]
+        indexs = indexs[0:5421]
+        label2indexs.append(indexs)
+
+    ### Construct an imbalanced dataset
+    ### For the agent with `agent_id`, it corresponds to 
+    #   * 2 major classes with labels of agent_id*2 and agent_id*2+1
+    #   * other 8 minor classes
+    # For a major classe and minor class, the data ratio is 80:5
+    all_samples = [[] for _ in range(NUM_AGENT)]
+    for label, indexs in enumerate(label2indexs):
+        left =0
+        for agent_id in range(NUM_AGENT):
+            if label == agent_id:
+                for sample_index in range(left, left+int(len(indexs)*0.4)):
+                    all_samples[agent_id].append(indexs[sample_index])
+                left=left+int(len(indexs)*0.4)
+            else:
+                for sample_index in range(left, left + int(len(indexs) * 0.05)):
+                    all_samples[agent_id].append(indexs[sample_index])
+                left = left + int(len(indexs) * 0.05)
+
+    ### Constuct batched dataset and normalize x
+    for agent_id, sample_idxs in enumerate(all_samples):
+        warmup_len = 2 * BATCH_SIZE
+        tmp = sample_idxs.copy()
+        np.random.shuffle(tmp)
+        if agent_id % 2 == 0:
+            sample_idxs = sample_idxs[:warmup_len] + tmp[warmup_len:]
+        else:
+            sample_idxs = tmp[:warmup_len] + sample_idxs[warmup_len:]
+
+        ### shuffle
+        sample_idxs = np.array(sample_idxs)
+        # np.random.shuffle(sample_idxs)
+        output_sequence_full[agent_id].append({
+                'x': np.array([source[0][idx].flatten() / 255.0 for idx in sample_idxs],
+                              dtype=np.float32),
+                'y': np.array([source[1][idx] for idx in sample_idxs], dtype=np.int32)})
+
+        for i in range(0, len(sample_idxs), BATCH_SIZE):
+            batch_sample_idxs = sample_idxs[i:i + BATCH_SIZE]
+            output_sequence[agent_id].append({
+                'x': np.array([source[0][idx].flatten() / 255.0 for idx in batch_sample_idxs],
+                              dtype=np.float32),
+                'y': np.array([source[1][idx] for idx in batch_sample_idxs], dtype=np.int32)})
+    
+    def iterator(agent_id):
+        while True:
+            for batch in output_sequence[agent_id]:
+                yield batch
+                
+    all_data = [iterator(agent_id) for agent_id in range(NUM_AGENT)]
+    return all_data, output_sequence_full
+
 
 ### NoiseY
 NOISE_STEP = 0.05

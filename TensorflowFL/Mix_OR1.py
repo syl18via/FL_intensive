@@ -16,6 +16,7 @@ from dataloader import *
 
 parser = argparse.ArgumentParser(description='FL')
 parser.add_argument("--distribution", type=str, default="mix", help="Data distribution")
+parser.add_argument("--lr", type=float, default=0.1, help="Initialized learning rate")
 parser.add_argument("--policy", type=str, default="my", help="Client Assignment Policy")
 parser.add_argument("--trade_once", action="store_true", help="Set to update clients selection only after the first epoch")
 args = parser.parse_args()
@@ -157,15 +158,13 @@ def weighted_average_model(local_models, all_data_num, client_index_list, evalua
 
         if (evaluate_each_client) and test_data is not None:
             ### Evaluate the model parameters of current agent if `evaluate_each_client` is True
-            loss = evaluate_on_server(
+            loss = evaluate_loss_on_server(
                 {
                 'weights': local_models[local_model_index][0],
                 'bias': local_models[local_model_index][1]
                 }, 
                 test_data)
             print(' - agent {}, loss={}'.format(client_id, loss))
-    # except:
-    #     import code
     return {'weights': m_w, "bias": m_b}
 
 def test_accuracy(model, test_data):
@@ -177,14 +176,27 @@ def test_accuracy(model, test_data):
     accuracy = tf.reduce_mean(tf.cast(correct_prediction[:892], tf.float32))
     return accuracy.numpy()
 
+def cross_entropy(model, test_batch):
+    predicted_y = tf.nn.softmax(tf.matmul(test_batch[0], model["weights"]) + model["bias"])
+    label = test_batch[1]
+    if len(np.shape(label)) == 1:
+        label = tf.one_hot(label, 10)
+    return -tf.reduce_mean(tf.reduce_sum(label * tf.math.log(predicted_y), axis=[1]))
+
+def evaluate_loss_on_server(model, test_batch):
+    return cross_entropy(model, test_batch)
+
 def train_with_gradient_and_valuation(task, client_set, test_data, all_data_num):
     client_index_list = []
     local_models = []
+    # if len(client_set) > 2:
+    #     import code
+    #     code.interact(local=locals())
     for idx in client_set:
         client_index_list.append(task.selected_client_idx[idx])
         local_models.append(task.params_per_client[idx][0])
     model = weighted_average_model(local_models, all_data_num, client_index_list, False, test_data=test_data)
-    return test_accuracy(model, test_data)
+    return np.array(evaluate_loss_on_server(model, test_data))
 
 class Task:
     def __init__(self, task_id, selected_client_idx, model,
@@ -263,6 +275,8 @@ if __name__ == "__main__":
         all_client_data_divide = get_data_evenly(mnist_train)
     elif args.distribution.lower() == "old":
         all_client_data_divide = get_data_for_federated_agents(mnist_train)
+    elif args.distribution.lower() == "mix2":
+        all_client_data_divide, all_client_data_full = get_data_for_digit_mix2(mnist_train)
     else:
         raise ValueError("Not implemented data distribution {}".format(args.distribution))
     all_client_data = all_client_data_divide
@@ -271,20 +285,12 @@ if __name__ == "__main__":
 
     def pick_client_based_on_index(epoch, selected_client_idx):
         clients_data = []
-        if epoch == 0:
-            return all_client_data_full
-
+        # if epoch == 0:
+        #     return all_client_data_full
 
         for idx in selected_client_idx:
             clients_data.append([next(all_client_data[idx])])
         return clients_data
-    
-    def evaluate_on_server(model, test_batch):
-        predicted_y = tf.nn.softmax(tf.matmul(test_batch[0], model["weights"]) + model["bias"])
-        label = test_batch[1]
-        if len(np.shape(label)) == 1:
-            label = tf.one_hot(label, 10)
-        return -tf.reduce_mean(tf.reduce_sum(label * tf.math.log(predicted_y), axis=[1]))
 
     ### 0 denotes free, 1 denotes being occupied
     free_client = [0] * NUM_AGENT
@@ -300,7 +306,7 @@ if __name__ == "__main__":
     b_initial = np.asarray(b_paras, dtype=np.float32).reshape([10])
     f_ini_p.close()
 
-    learning_rate = 0.1
+    learning_rate = args.lr
 
     ### Initialize the global model parameters for both tasks
     ### At the first epoch, both tasks select all clients
@@ -316,7 +322,7 @@ if __name__ == "__main__":
         task_list.append(task)
 
         ### Init the loss
-        task.prev_loss = evaluate_on_server(task.model, test_data)
+        task.prev_loss = evaluate_loss_on_server(task.model, test_data)
 
     # for client_id in range(NUM_AGENT):
     #     create_task(
@@ -366,7 +372,7 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=1,
+        required_client_num=3,
         bid_per_loss_delta=1)
 
     create_task(
@@ -376,7 +382,7 @@ if __name__ == "__main__":
                 'weights': w_initial,
                 'bias': b_initial
         },
-        required_client_num=1,
+        required_client_num=3,
         bid_per_loss_delta=1
         )
 
@@ -419,11 +425,11 @@ if __name__ == "__main__":
         ### Store the model parameters of this round if ckpt is True
         for local_index in range(len(local_models)):
             client_id = task.selected_client_idx[local_index]
-            # if epoch == 0:
-            #     if task.params_per_client[local_index] is None:
-            #         task.params_per_client[local_index] = []
-            #     task.params_per_client[local_index].append(
-            #         (local_models[local_index], learning_rate))
+            if epoch == 0:
+                if task.params_per_client[local_index] is None:
+                    task.params_per_client[local_index] = []
+                task.params_per_client[local_index].append(
+                    (local_models[local_index], learning_rate))
             task.params_per_client[local_index] = (local_models[local_index], learning_rate)
             if ckpt:
                 f = open(os.path.join(os.path.dirname(__file__), "weights_"+str(client_id)+".txt"),"a",encoding="utf-8")
@@ -456,7 +462,7 @@ if __name__ == "__main__":
         task.learning_rate = learning_rate
 
         ### evaluate the loss
-        loss = evaluate_on_server(task.model, test_data)
+        loss = evaluate_loss_on_server(task.model, test_data)
         task.totoal_loss_delta = 1000*float(task.prev_loss - loss)
         task.prev_loss = loss
         task.log("Epoch {} Round {} at {:.3f} s, selected_client_idx: {}, learning rate: {:.3f}, loss: {:.3f}, loss_delta: {:.3f}".format(
@@ -480,7 +486,8 @@ if __name__ == "__main__":
         # raise
 
         for s in all_sets:
-            contrib = train_with_gradient_and_valuation(task, s, test_data, data_num)
+            _loss = train_with_gradient_and_valuation(task, s, test_data, data_num)
+            contrib = task.prev_loss - _loss
             group_shapley_value.append(contrib)
             # task.log(str(s)+"\t"+str(group_shapley_value[len(group_shapley_value)-1]))
 
@@ -499,6 +506,9 @@ if __name__ == "__main__":
         # for ag_s in agent_shapley:
         #     print(ag_s)
         # task.select_clients(agent_shapley, free_client)
+        # if sum(agent_shapley) == 0:
+        #     import code
+        #     code.interact(local=locals())
         return agent_shapley
         
     EPOCH_NUM = 35
@@ -540,7 +550,13 @@ if __name__ == "__main__":
         
         shapely_value_table = [calculate_feedback(task) for task in task_list]
         ### Normalize by task
-        shapely_value_table = [np.array(s_list) / (sum(s_list) if sum(s_list) !=0 else 0.1) for s_list in shapely_value_table]
+        shapely_value_table = np.array(shapely_value_table)
+        if np.sum(shapely_value_table) < 0:
+            # shapely_value_table += shapely_value_table - np.min(shapely_value_table)
+            shapely_value_table = np.array([np.array(s_list) / (sum(s_list) if sum(s_list) !=0 else 0.1) for s_list in shapely_value_table])
+            shapely_value_table = - shapely_value_table
+        else:
+            shapely_value_table = [np.array(s_list) / (sum(s_list) if sum(s_list) !=0 else 0.1) for s_list in shapely_value_table]
 
         print(shapely_value_table)
 
@@ -551,7 +567,9 @@ if __name__ == "__main__":
                 client_idx = selected_client_index[idx]
                 shapley_value = shapely_value_table[task_idx][idx]
                 shapely_value_scaled = shapley_value * len(selected_client_index) / NUM_AGENT
-                price_table[client_idx][task_idx] =1.2*((epoch / (epoch + 1)) * price_table[client_idx][task_idx] + (1 / (epoch + 1)) * shapely_value_scaled) 
+                # price_table[client_idx][task_idx] = ((epoch / (epoch + 1)) * price_table[client_idx][task_idx] + (1 / (epoch + 1)) * shapely_value_scaled) 
+                price_table[client_idx][task_idx] = shapely_value_scaled 
+
 
         assert price_table is not None
     
