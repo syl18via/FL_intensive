@@ -26,10 +26,13 @@ args = parser.parse_args()
 
 # NUM_EXAMPLES_PER_USER = 1000
 
-
+### Experiment Configs
 MIX_RATIO = 0.8
 SIMULATE = False
+EPOCH_NUM = 50
 
+
+### FL config
 BATCH_TYPE = tff.NamedTupleType([
     ('x', tff.TensorType(tf.float32, [None, 784])),
     ('y', tff.TensorType(tf.int32, [None]))])
@@ -201,7 +204,8 @@ def train_with_gradient_and_valuation(task, client_set, test_data, all_data_num)
 class Task:
     def __init__(self, task_id, selected_client_idx, model,
             required_client_num=None,
-            bid_per_loss_delta=None):
+            bid_per_loss_delta=None,
+            target_labels=None):
         self.selected_client_idx = selected_client_idx    # a list of client indexes of selected clients
         self.model = model  # model parameters
         self.model_epoch_start = None # model parameters at the start of an epoch
@@ -214,6 +218,8 @@ class Task:
         self.prev_loss = None
         self.totoal_loss_delta = None
         self.params_per_client = None
+
+        self.target_labels = None
     
     def log(self, *args, **kwargs):
         print("[Task {} - epoch {}]: ".format(self.task_id, self.epoch), *args, **kwargs)
@@ -250,9 +256,18 @@ class Task:
 
         self.log("Clients {} are selected.".format(self.selected_client_idx))
 
+# class Client:
+#     def __init__(self, ...):
+#         self.cost = xxx
+#         self.id = xxx
+#         self.idlecost = xxx
+#         self.data = xxx
+
+
 if __name__ == "__main__":
     start_time = time.time()
 
+    ############################### client ###########################################
     data_num = np.asarray([5421 * 2] * NUM_AGENT)
     agents_weights = np.divide(data_num, data_num.sum())
 
@@ -282,18 +297,49 @@ if __name__ == "__main__":
     all_client_data = all_client_data_divide
     test_data = get_test_images_labels("SAME")
     
-
-    def pick_client_based_on_index(epoch, selected_client_idx):
-        clients_data = []
-        # if epoch == 0:
-        #     return all_client_data_full
-
-        for idx in selected_client_idx:
-            clients_data.append([next(all_client_data[idx])])
-        return clients_data
-
     ### 0 denotes free, 1 denotes being occupied
     free_client = [0] * NUM_AGENT
+
+    cost_list = []
+    for client_idx in range(NUM_AGENT):
+        # cost_list.append(random.randint(1,10)/10)
+        cost_list.append(0)
+    
+    
+    idlecost_list = []
+    for client_idx in range(NUM_AGENT):
+        idlecost_list.append(0)
+
+    client_feature_list = list(zip( cost_list, idlecost_list))
+
+    # client_list = []
+    # for client_idx in range(NUM_AGENT):
+    #     client = Client(....)
+    #     client_list.append(client)
+    ############################### client end ###########################################
+
+    def pick_client_based_on_index(task, epoch, selected_client_idx):
+        clients_data = []
+        # if epoch == 0:
+        #      return all_client_data_full
+        
+        # else:
+        for idx in selected_client_idx:
+            batch= next(all_client_data[idx])
+            if task.target_labels is None:
+                new_batch = batch
+            else:
+                # filter batch according to required labels of tasks
+                new_batch = {"x": [], "y": []}
+                for idx, y in enumerate(batch["y"]):
+                    if y in task.target_labels:
+                        new_batch["x"].append(batch["x"][idx])
+                        new_batch["y"].append(batch["y"][idx])
+
+            clients_data.append([new_batch])
+
+        return clients_data
+
     
     ### Read inital model parameters from files
     f_ini_p = open(os.path.join(os.path.dirname(__file__), "initial_model_parameters.txt"), "r")
@@ -307,96 +353,49 @@ if __name__ == "__main__":
     f_ini_p.close()
 
     learning_rate = args.lr
+    
 
+    ############################### Task ###########################################
     ### Initialize the global model parameters for both tasks
     ### At the first epoch, both tasks select all clients
     
+    bid_per_loss_delta_list = [1]
+    required_client_num_list = [1]
+    target_labels_list = [[0, 1, 2, 3, 4], [5, 6, 7, 8, 9]]
+
+    def sample_config(l, id, use_random=True):
+        if use_random:
+            return random.sample(l, 1)[0]
+        else:
+            return l[id%len(l)]
+
     task_list = []
-    def create_task(task_id, selected_client_idx, init_model, required_client_num, bid_per_loss_delta):
+    def create_task(selected_client_idx, init_model, required_client_num, bid_per_loss_delta, target_labels=None):
         task = Task(
-            task_id = task_id,
+            task_id = len(task_list),
             selected_client_idx=selected_client_idx,
             model = init_model,
             required_client_num=required_client_num,
-            bid_per_loss_delta=bid_per_loss_delta)
+            bid_per_loss_delta=bid_per_loss_delta,
+            target_labels=target_labels)
         task_list.append(task)
 
         ### Init the loss
         task.prev_loss = evaluate_loss_on_server(task.model, test_data)
-
-    # for client_id in range(NUM_AGENT):
-    #     create_task(
-    #         task_id = client_id,
-    #         selected_client_idx=[client_id],
-    #         init_model = {
-    #                 'weights': w_initial,
-    #                 'bias': b_initial
-    #         },
-    #         required_client_num=1,
-    #         bid_per_loss_delta=1)
-
-    # create_task(
-    #         task_id = 0,
-    #         selected_client_idx=[0],
-    #         init_model = {
-    #                 'weights': w_initial,
-    #                 'bias': b_initial
-    #         },
-    #         required_client_num=1,
-    #         bid_per_loss_delta=1)
-
-    # create_task(
-    #         task_id = 1,
-    #         selected_client_idx=[0, 1],
-    #         init_model = {
-    #                 'weights': w_initial,
-    #                 'bias': b_initial
-    #         },
-    #         required_client_num=1,
-    #         bid_per_loss_delta=1)
     
-    # create_task(
-    #         task_id = 2,
-    #         selected_client_idx=[0, 1, 2],
-    #         init_model = {
-    #                 'weights': w_initial,
-    #                 'bias': b_initial
-    #         },
-    #         required_client_num=1,
-    #         bid_per_loss_delta=1)
-
-    create_task(
-        task_id = 0,
-        selected_client_idx=list(range(NUM_AGENT)),
-        init_model = {
-                'weights': w_initial,
-                'bias': b_initial
-        },
-        required_client_num=3,
-        bid_per_loss_delta=1)
-
-    create_task(
-        task_id = 1,
-        selected_client_idx=list(range(NUM_AGENT)),
-        init_model = {
-                'weights': w_initial,
-                'bias': b_initial
-        },
-        required_client_num=3,
-        bid_per_loss_delta=1
+    TASK_NUM = 2
+    for task_id in range(TASK_NUM):
+        create_task(
+            selected_client_idx=list(range(NUM_AGENT)),
+            init_model = {
+                    'weights': w_initial,
+                    'bias': b_initial
+            },
+            required_client_num=sample_config(required_client_num_list, task_id, use_random=True),
+            bid_per_loss_delta=sample_config(bid_per_loss_delta_list, task_id, use_random=True),
+            target_labels=sample_config(target_labels_list,task_id, use_random=True)
         )
 
-    cost_list = []
-    for client_idx in range(NUM_AGENT):
-        # cost_list.append(random.randint(1,10)/10)
-        cost_list.append(0)
-    
-    
-    idlecost_list = []
-    for client_idx in range(NUM_AGENT):
-        idlecost_list.append(0)
-
-    client_feature_list = list(zip( cost_list, idlecost_list))
 
     ### Initialize the price_table
     price_table = None
@@ -412,7 +411,7 @@ if __name__ == "__main__":
     price_table = init_price_table(price_table)
     
     def train_one_round(task, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False):
-        clients_data = pick_client_based_on_index(epoch, task.selected_client_idx)
+        clients_data = pick_client_based_on_index(task, epoch, task.selected_client_idx)
         task.params_per_client = [None] * len(task.selected_client_idx)
 
         ### Train
@@ -511,7 +510,6 @@ if __name__ == "__main__":
         #     code.interact(local=locals())
         return agent_shapley
         
-    EPOCH_NUM = 35
     ### Main process of FL
     total_reward_list = []
     reward_sum=[]
@@ -535,18 +533,8 @@ if __name__ == "__main__":
         
         print("Start to update client assignment ... ")
 
-        bid_list = [task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list]
-        total_bid = sum(bid_list)
-        total_cost = 0
         
-        for task in task_list:
-            for client_idx in task.selected_client_idx :
-                total_cost += cost_list[client_idx]
-        if epoch > 0:       
-            total_reward = total_bid - total_cost
-            total_reward_list.append(total_reward)
-            reward_sum.append(sum(total_reward_list))
-            print(reward_sum[-1])
+        
         
         shapely_value_table = [calculate_feedback(task) for task in task_list]
         ### Normalize by task
@@ -569,7 +557,14 @@ if __name__ == "__main__":
                 shapely_value_scaled = shapley_value * len(selected_client_index) / NUM_AGENT
                 # price_table[client_idx][task_idx] = ((epoch / (epoch + 1)) * price_table[client_idx][task_idx] + (1 / (epoch + 1)) * shapely_value_scaled) 
                 price_table[client_idx][task_idx] = shapely_value_scaled 
-
+        
+        total_cost = 0
+        bid_list = [task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list]
+        total_bid = sum(bid_list)
+        
+        for task in task_list:
+            for client_idx in task.selected_client_idx :
+                total_cost += cost_list[client_idx]
 
         assert price_table is not None
     
@@ -583,14 +578,8 @@ if __name__ == "__main__":
                 shapley_value = shapely_value_table[task_idx][idx]
                 bid_table[client_idx][task_idx] = shapley_value * bid_list[task_idx]
 
-
         # reward_list = [task.totoal_loss_delta * task.bid_per_loss_delta for task in task_list]
-
-        
-        
         # reward_list = [task.totoal_loss_delta * task.bid_per_loss_delta - total_cost for task in task_list]
-        
-
         #print ('reward list', reward_list)
 
         print("Start to select clients ... ")
@@ -610,6 +599,25 @@ if __name__ == "__main__":
         
         for task in task_list:
             task.end_of_epoch()
+
+        ### caclulate reward
+        if epoch > 0:
+            if args.policy == "mcafee":
+                raise NotImplementedError("Current implementation is wrong")
+                client_value_table = policy.calcualte_client_value(price_table, client_feature_list)
+                task_price_list = np.sum(bid_table, axis=0)
+                sorted_task_with_index = sorted(enumerate(task_price_list), key=lambda x: x[1], reverse=True)
+                client_value_list = np.sum((client_value_table), axis=1)
+                client_value_list_sorted = sorted(enumerate(client_value_list), key=lambda x: x[1], reverse=False)
+                for j in selected_client_index:
+                    b = client_value_list_sorted[j][1]
+                bid_list = [task.totoal_loss_delta * 1/2* (task.bid_per_loss_delta +b ) for task in task_list]
+            else:     
+                total_reward = total_bid - total_cost
+                total_reward_list.append(total_reward)
+                reward_sum.append(sum(total_reward_list))
+                print(reward_sum[-1])
+
 
     ### end of trianing
     with open("total_reward_list_{}.json".format(args.policy), 'w') as fp:
