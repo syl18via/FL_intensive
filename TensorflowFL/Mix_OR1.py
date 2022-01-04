@@ -13,6 +13,7 @@ import os
 ### self-defined module
 import policy
 from dataloader import *
+import util
 
 parser = argparse.ArgumentParser(description='FL')
 parser.add_argument("--distribution", type=str, default="mix", help="Data distribution")
@@ -532,10 +533,7 @@ if __name__ == "__main__":
         ### At the first epoch, calculate the Feedback and update clients for each task
         
         print("Start to update client assignment ... ")
-
-        
-        
-        
+  
         shapely_value_table = [calculate_feedback(task) for task in task_list]
         ### Normalize by task
         shapely_value_table = np.array(shapely_value_table)
@@ -584,15 +582,30 @@ if __name__ == "__main__":
 
         print("Start to select clients ... ")
         if epoch == 0 or not args.trade_once:
+            ask_table = util.calcualte_client_value(price_table, client_feature_list)
+            norm_ask_table = util.normalize_data(ask_table)
+            norm_bid_table = util.normalize_data(bid_table)
             if args.policy == "my":
-                policy.my_select_clients(price_table, client_feature_list, task_list, bid_table)
+                policy.my_select_clients(
+                    norm_ask_table,
+                    client_feature_list,
+                    task_list,
+                    norm_bid_table)
             elif args.policy == "random":
-                policy.random_select_clients(task_list,NUM_AGENT)
+                policy.random_select_clients(
+                    norm_ask_table,
+                    client_feature_list,
+                    task_list,
+                    norm_bid_table)
             elif args.policy == "simple":
-                policy.simple_select_clients(task_list,NUM_AGENT)
+                policy.simple_select_clients(task_list, NUM_AGENT)
             elif args.policy == "mcafee":
                 if epoch == 0:
-                    policy.mcafee_select_clients(price_table, client_feature_list, task_list, bid_table)
+                    policy.mcafee_select_clients(
+                        norm_ask_table,
+                        client_feature_list,
+                        task_list,
+                        norm_bid_table)
             else:
                 raise
         print("Client assignment Done ")
