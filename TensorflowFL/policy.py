@@ -179,7 +179,7 @@ def simple_select_clients(task_list, client_number):
 
 def random_select_clients(ask_table, client_feature_list, task_list, bid_table):
     num_of_client = len(client_feature_list)
-    free_client = [True] * len(client_feature_list)
+    free_client = [True] * num_of_client
 
     for task_idx, _ in enumerate(task_list):
         _task = task_list[task_idx]
