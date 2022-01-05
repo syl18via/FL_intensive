@@ -373,7 +373,7 @@ def run_one_trial():
         ### caclulate reward
         if epoch > 0:
             if args.policy == "mcafee":
-                reward  = policy.mcafee_select_clients(
+                _, reward  = policy.mcafee_select_clients(
                         norm_ask_table,
                         client_feature_list,
                         task_list,
