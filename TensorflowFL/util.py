@@ -14,3 +14,6 @@ def calcualte_client_value(price_table, client_feature_list):
         value_list = [price / (idle_cost_list[client_idx]+1) for price in  client_price_list]
         value_table.append(value_list)
     return value_table
+
+def sigmoid(data):
+    return 1/ (1+ np.exp(-data))

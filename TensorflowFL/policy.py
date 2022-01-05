@@ -30,17 +30,19 @@ def select_one_client(client_idx, selected_client_index, free_client, _task):
     free_client[client_idx] = False
     return len(selected_client_index) >= _task.required_client_num
 
-def check_trade_success_or_not(selected_client_index, _task, free_client):
+def check_trade_success_or_not(selected_client_index, _task, free_client,update= True):
     if len(selected_client_index) < _task.required_client_num:
         ### Trade failed
         for client_idx in selected_client_index:
             free_client[client_idx] = True
-        _task.selected_client_idx = None
+        if update:
+            _task.selected_client_idx = None
         return False
     else:
         ### Successful trade
-        _task.selected_client_idx = selected_client_index
-        print("Clients {} are assined to task {}".format(selected_client_index, _task.task_id))
+        if update:
+            _task.selected_client_idx = selected_client_index
+            print("Clients {} are assined to task {}".format(selected_client_index, _task.task_id))
         return True
 
 def my_select_clients(ask_table, client_feature_list, task_list, bid_table):
@@ -54,10 +56,10 @@ def my_select_clients(ask_table, client_feature_list, task_list, bid_table):
     ### policy
     
 
-    ### shape of task_price_list = (task_num)
-    task_price_list = np.sum(bid_table, axis=0)
+    ### shape of task_bid_list = (task_num)
+    task_bid_list = np.sum(bid_table, axis=0)
 
-    sorted_task_with_index = sorted(enumerate(task_price_list), key=lambda x: x[1], reverse=True)
+    sorted_task_with_index = sorted(enumerate(task_bid_list), key=lambda x: x[1], reverse=True)
     free_client = [True] * len(client_feature_list)
     for task_idx, _ in sorted_task_with_index:
         _task = task_list[task_idx]
@@ -76,7 +78,7 @@ def my_select_clients(ask_table, client_feature_list, task_list, bid_table):
         check_trade_success_or_not(selected_client_index, _task, free_client)
 
 
-def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table):
+def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, update= True):
     ''' client_feature_list: list
             a list of (cost, idlecost)
         task_list: list
@@ -89,20 +91,20 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table):
 
     ### policy
 
-    ### shape of task_price_list = (task_num)
-    task_price_list = np.sum(bid_table, axis=0)
-    sorted_task_with_index = sorted(enumerate(task_price_list), key=lambda x: x[1], reverse=True)
-    client_value_list = np.sum((ask_table), axis=1)
+    ### shape of task_bid_list = (task_num)
+    task_bid_list = np.sum(bid_table, axis=0)
+    sorted_task_with_index = sorted(enumerate(task_bid_list), key=lambda x: x[1], reverse=True)
+    client_value_list = 4+ np.sum((ask_table), axis=1)
     client_value_list_sorted = sorted(enumerate(client_value_list), key=lambda x: x[1], reverse=False)
     client_num= len(client_value_list)
-    task_num = len(task_price_list)
+    task_num = len(task_bid_list)
     print("mb", sorted_task_with_index)
     print("ma",client_value_list_sorted)
     print("task#: ", task_num, " client#: ", client_num)
 
     i = 0
     free_client = [True] * len(client_feature_list)
-    while i < task_num:
+    while i < task_num-1:
         task_id = sorted_task_with_index[i][0]
         _task = task_list[task_id]
         trade_succed = False
@@ -112,12 +114,22 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table):
         selected_client_index = []
         while j < (client_num-1):
             client_id = client_value_list_sorted[j][0]
-            try:
+
+            has_post_client = False
+            next_idx = 1
+            while (j+next_idx) < client_num:
+                next_client_id = client_value_list_sorted[j+next_idx][0]
+                if free_client[next_client_id]:
+                    has_post_client = True
+                    break
+                next_idx += 1
+
+            if has_post_client:
                 check = free_client[client_id] and sorted_task_with_index[i][1] >= client_value_list_sorted[j][1] \
-                    and sorted_task_with_index[i][1] < client_value_list_sorted[j+1][1]
-            except:
-                import code
-                code.interact(local=locals())
+                    and sorted_task_with_index[i][1] < client_value_list_sorted[j+next_idx][1]
+            else:
+                check = False
+
             if check:
                 is_task_ready = select_one_client(client_id, selected_client_index, free_client, _task)
                 ### check whether the requirement of this taks has been met
@@ -133,7 +145,26 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table):
         if not trade_succed:
             raise ValueError("Fail trading")
         ### end of client selection for one task
-        check_trade_success_or_not(selected_client_index, _task, free_client)
+        trade_succed = check_trade_success_or_not(selected_client_index, _task, free_client, update = update)
+
+        ### Cacluate reward 
+        reward = 0
+        if trade_succed:
+            refer_bid = task_bid_list[i+1]
+            for client_idx in selected_client_index:
+                refer_ask = client_value_list[client_idx + 1]
+                reward += (refer_bid + refer_ask) / 2
+            
+        i += 1
+
+    
+    ### Note: the last task can absolutely not trade successfully
+    # if update:
+    #     task_id = sorted_task_with_index[task_num-1][0]
+    #     _task = task_list[task_id]
+    #     _task.selected_client_idx = None
+
+    return reward
 
     ### The original mecafee algorithm
     # while task_num > 0:

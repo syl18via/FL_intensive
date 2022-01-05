@@ -412,6 +412,9 @@ if __name__ == "__main__":
     price_table = init_price_table(price_table)
     
     def train_one_round(task, round_idx, learning_rate, epoch, ckpt=False, evaluate_each_client=False):
+        if task.selected_client_idx is None:
+            assert args.trade_once
+            return
         clients_data = pick_client_based_on_index(task, epoch, task.selected_client_idx)
         task.params_per_client = [None] * len(task.selected_client_idx)
 
@@ -535,15 +538,9 @@ if __name__ == "__main__":
         print("Start to update client assignment ... ")
   
         shapely_value_table = [calculate_feedback(task) for task in task_list]
-        ### Normalize by task
+        ### Normalize using sigmoid
         shapely_value_table = np.array(shapely_value_table)
-        if np.sum(shapely_value_table) < 0:
-            # shapely_value_table += shapely_value_table - np.min(shapely_value_table)
-            shapely_value_table = np.array([np.array(s_list) / (sum(s_list) if sum(s_list) !=0 else 0.1) for s_list in shapely_value_table])
-            shapely_value_table = - shapely_value_table
-        else:
-            shapely_value_table = [np.array(s_list) / (sum(s_list) if sum(s_list) !=0 else 0.1) for s_list in shapely_value_table]
-
+        shapely_value_table = util.sigmoid(shapely_value_table)
         print(shapely_value_table)
 
         ### Update price table
@@ -601,11 +598,12 @@ if __name__ == "__main__":
                 policy.simple_select_clients(task_list, NUM_AGENT)
             elif args.policy == "mcafee":
                 if epoch == 0:
-                    policy.mcafee_select_clients(
+                    reward = policy.mcafee_select_clients(
                         norm_ask_table,
                         client_feature_list,
                         task_list,
                         norm_bid_table)
+                    norm_bid_table_first_epoch = norm_bid_table.copy()
             else:
                 raise
         print("Client assignment Done ")
@@ -616,15 +614,25 @@ if __name__ == "__main__":
         ### caclulate reward
         if epoch > 0:
             if args.policy == "mcafee":
-                raise NotImplementedError("Current implementation is wrong")
-                client_value_table = policy.calcualte_client_value(price_table, client_feature_list)
-                task_price_list = np.sum(bid_table, axis=0)
-                sorted_task_with_index = sorted(enumerate(task_price_list), key=lambda x: x[1], reverse=True)
-                client_value_list = np.sum((client_value_table), axis=1)
-                client_value_list_sorted = sorted(enumerate(client_value_list), key=lambda x: x[1], reverse=False)
-                for j in selected_client_index:
-                    b = client_value_list_sorted[j][1]
-                bid_list = [task.totoal_loss_delta * 1/2* (task.bid_per_loss_delta +b ) for task in task_list]
+                total_bid  = policy.mcafee_select_clients(
+                        norm_ask_table,
+                        client_feature_list,
+                        task_list,
+                        norm_bid_table_first_epoch,
+                        update=False)
+                total_reward = total_bid - total_cost
+                total_reward_list.append(total_reward)
+                reward_sum.append(sum(total_reward_list))
+                print(reward_sum[-1])
+                # raise NotImplementedError("Current implementation is wrong")
+                # client_value_table = policy.calcualte_client_value(price_table, client_feature_list)
+                # task_price_list = np.sum(bid_table, axis=0)
+                # sorted_task_with_index = sorted(enumerate(task_price_list), key=lambda x: x[1], reverse=True)
+                # client_value_list = np.sum((client_value_table), axis=1)
+                # client_value_list_sorted = sorted(enumerate(client_value_list), key=lambda x: x[1], reverse=False)
+                # for j in selected_client_index:
+                #     b = client_value_list_sorted[j][1]
+                # bid_list = [task.totoal_loss_delta * 1/2* (task.bid_per_loss_delta +b ) for task in task_list]
             else:     
                 total_reward = total_bid - total_cost
                 total_reward_list.append(total_reward)
