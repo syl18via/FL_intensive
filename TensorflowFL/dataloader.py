@@ -3,9 +3,14 @@ import numpy as np
 import math
 import os
 
+import tensorflow as tf
+
 
 NUM_AGENT = 10
 BATCH_SIZE = 100
+data_num = np.asarray([5421 * 2] * NUM_AGENT)
+
+
 def get_data_for_digit(source, digit):
     output_sequence = []
     all_samples = [i for i, d in enumerate(source[1]) if d == digit]
@@ -433,3 +438,33 @@ def get_test_images_labels(distr_type):
         test_images = readTestImagesFromFile(False)
         test_labels_onehot = readTestLabelsFromFile(False)
     return test_images, test_labels_onehot
+
+def main_load(args):
+    agents_weights = np.divide(data_num, data_num.sum())
+
+    for index in range(NUM_AGENT):
+        f = open(os.path.join(os.path.dirname(__file__), "weights_"+str(index)+".txt"), "w")
+        f.close()
+        f = open(os.path.join(os.path.dirname(__file__), "bias_" + str(index) + ".txt"), "w")
+        f.close()
+    mnist_train, mnist_test = tf.keras.datasets.mnist.load_data()
+
+    if args.distribution.lower() == "mix":
+        all_client_data_divide, all_client_data_full = get_data_for_digit_mix(mnist_train)
+    elif args.distribution.lower() == "noisey":
+        all_client_data_divide = get_data_for_digit_noiseY(mnist_train)
+    elif args.distribution.lower() == "noisex":
+        all_client_data_divide, all_client_data_full = get_data_for_digit_noiseX(mnist_train)
+    elif args.distribution.lower() == "same":
+        all_client_data_divide = get_data_for_digit_same(mnist_train)
+    elif args.distribution.lower() == "even":
+        all_client_data_divide = get_data_evenly(mnist_train)
+    elif args.distribution.lower() == "old":
+        all_client_data_divide = get_data_for_federated_agents(mnist_train)
+    elif args.distribution.lower() == "mix2":
+        all_client_data_divide, all_client_data_full = get_data_for_digit_mix2(mnist_train)
+    else:
+        raise ValueError("Not implemented data distribution {}".format(args.distribution))
+    all_client_data = all_client_data_divide
+    test_data = get_test_images_labels("SAME")
+    return all_client_data, test_data, all_client_data_full

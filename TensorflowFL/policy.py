@@ -61,6 +61,7 @@ def my_select_clients(ask_table, client_feature_list, task_list, bid_table):
 
     sorted_task_with_index = sorted(enumerate(task_bid_list), key=lambda x: x[1], reverse=True)
     free_client = [True] * len(client_feature_list)
+    succ_cnt = 0
     for task_idx, _ in sorted_task_with_index:
         _task = task_list[task_idx]
         
@@ -75,7 +76,11 @@ def my_select_clients(ask_table, client_feature_list, task_list, bid_table):
                 if is_task_ready:
                     break
         
-        check_trade_success_or_not(selected_client_index, _task, free_client)
+        is_succ = check_trade_success_or_not(selected_client_index, _task, free_client)
+        if is_succ:
+            succ_cnt += _task.required_client_num
+    
+    return succ_cnt, None
 
 
 def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, update= True):
@@ -86,15 +91,13 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, 
         bid_table: numpy array
             shape = (client_num, task_num)
     '''
-    for task in task_list:
-        task.selected_client_idx = []
 
     ### policy
 
     ### shape of task_bid_list = (task_num)
-    task_bid_list = np.sum(bid_table, axis=0)
+    task_bid_list = np.sum(bid_table, axis=0)-5
     sorted_task_with_index = sorted(enumerate(task_bid_list), key=lambda x: x[1], reverse=True)
-    client_value_list = 4+ np.sum((ask_table), axis=1)
+    client_value_list =  np.sum((ask_table), axis=1)
     client_value_list_sorted = sorted(enumerate(client_value_list), key=lambda x: x[1], reverse=False)
     client_num= len(client_value_list)
     task_num = len(task_bid_list)
@@ -104,6 +107,7 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, 
 
     i = 0
     free_client = [True] * len(client_feature_list)
+    succ_cnt = 0
     while i < task_num-1:
         task_id = sorted_task_with_index[i][0]
         _task = task_list[task_id]
@@ -135,8 +139,6 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, 
                 ### check whether the requirement of this taks has been met
                 if is_task_ready:
                     # raise NotImplementedError("Remove this task away")
-                    sorted_task_with_index.pop(i)
-                    task_num -= 1
                     trade_succed = True
                     break
                 j = 0
@@ -144,10 +146,11 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, 
             j += 1
         if not trade_succed:
             raise ValueError("Fail trading")
+        
         ### end of client selection for one task
         trade_succed = check_trade_success_or_not(selected_client_index, _task, free_client, update = update)
 
-        ### Cacluate reward 
+        ### Cacluate reward  and count successful matching
         reward = 0
         if trade_succed:
             refer_bid = task_bid_list[i+1]
@@ -155,16 +158,18 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, 
                 refer_ask = client_value_list[client_idx + 1]
                 reward += (refer_bid + refer_ask) / 2
             
+            ### count successful matching
+            succ_cnt += _task.required_client_num
+            
         i += 1
 
-    
     ### Note: the last task can absolutely not trade successfully
-    # if update:
-    #     task_id = sorted_task_with_index[task_num-1][0]
-    #     _task = task_list[task_id]
-    #     _task.selected_client_idx = None
+    if update:
+        task_id = sorted_task_with_index[task_num-1][0]
+        _task = task_list[task_id]
+        _task.selected_client_idx = None
 
-    return reward
+    return succ_cnt, reward
 
     ### The original mecafee algorithm
     # while task_num > 0:
@@ -192,7 +197,9 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, 
     #         raise ValueError("Fail trading")
 
 def simple_select_clients(task_list, client_number):
+    raise NotImplementedError("Nana's homework")
     free_client = [True] * client_number
+    succ_cnt = 0
     for task_idx, _ in enumerate(task_list):
         _task = task_list[task_idx]
         num_of_client = _task.required_client_num
@@ -211,7 +218,7 @@ def simple_select_clients(task_list, client_number):
 def random_select_clients(ask_table, client_feature_list, task_list, bid_table):
     num_of_client = len(client_feature_list)
     free_client = [True] * num_of_client
-
+    succ_cnt = 0
     for task_idx, _ in enumerate(task_list):
         _task = task_list[task_idx]
        
@@ -226,4 +233,7 @@ def random_select_clients(ask_table, client_feature_list, task_list, bid_table):
                 if is_task_ready:
                     break
         
-        check_trade_success_or_not(selected_client_index, _task, free_client)
+        is_succ = check_trade_success_or_not(selected_client_index, _task, free_client)
+        if is_succ:
+            succ_cnt += _task.required_client_num
+    return succ_cnt, None
