@@ -391,17 +391,15 @@ def run_one_trial():
                 total_reward = total_bid - total_cost
                 total_reward_list.append(total_reward)
                 reward_sum.append(sum(total_reward_list))
-                
-
-            if args.policy == "even":
+            elif args.policy == "even":
                 _, reward  = policy.even_select_clients(
                     norm_ask_table,
                     client_feature_list,
                     task_list,
-                    norm_bid_table
+                    norm_bid_table,
+                    update=False
                     )
-                single_reward = len(selected_client_index) * reward
-                total_reward = single_reward - total_cost
+                total_reward = reward - total_cost
                 total_reward_list.append(total_reward)
                 reward_sum.append(sum(total_reward_list))
                 # raise NotImplementedError("Current implementation is wrong")

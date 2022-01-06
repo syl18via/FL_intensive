@@ -240,12 +240,12 @@ def random_select_clients(ask_table, client_feature_list, task_list, bid_table):
             succ_cnt += _task.required_client_num
     return succ_cnt, None
 
-def even_select_clients(ask_table, client_feature_list, task_list, bid_table):
+def even_select_clients(ask_table, client_feature_list, task_list, bid_table, update=True):
     num_of_client = len(client_feature_list)
     free_client = [True] * num_of_client
     succ_cnt = 0
+    reward = 0
     task_bid_list = np.sum(bid_table, axis=0)-5
-    sorted_task_with_index = sorted(enumerate(task_bid_list), key=lambda x: x[1], reverse=True)
     for task_idx, _ in enumerate(task_list):
         _task = task_list[task_idx]
        
@@ -260,17 +260,12 @@ def even_select_clients(ask_table, client_feature_list, task_list, bid_table):
                 if is_task_ready:
                     break
         
-        is_succ = check_trade_success_or_not(selected_client_index, _task, free_client)
-        reward = 0
-        i=0
-        task_num= len(task_bid_list)
-        while i < task_num:
-            if is_succ:
-                ### Cacluate reward  and count successful matching
-                refer_bid = task_bid_list[i]
-                for client_idx in selected_client_index:
-                    reward += refer_bid  / len(selected_client_index)
-                succ_cnt += _task.required_client_num
-            i += 1
-        
+        is_succ = check_trade_success_or_not(selected_client_index, _task, free_client, update = update)
+        if is_succ:
+            succ_cnt += _task.required_client_num
+            ### Cacluate reward  and count successful matching
+            refer_bid = task_bid_list[task_idx]
+            for client_idx in selected_client_index:
+                reward += refer_bid / len(selected_client_index)
+
     return succ_cnt, reward
