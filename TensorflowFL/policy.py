@@ -145,10 +145,12 @@ def mcafee_select_clients(ask_table, client_feature_list, task_list, bid_table, 
                 continue
             j += 1
         if not trade_succed:
-            raise ValueError("Fail trading")
-        
-        ### end of client selection for one task
-        trade_succed = check_trade_success_or_not(selected_client_index, _task, free_client, update = update)
+            for client_idx in selected_client_index:
+                free_client[client_idx] = True
+            # raise ValueError("Fail trading")
+        else:
+            ### end of client selection for one task
+            trade_succed = check_trade_success_or_not(selected_client_index, _task, free_client, update = update)
 
         ### Cacluate reward  and count successful matching
         reward = 0
@@ -237,3 +239,38 @@ def random_select_clients(ask_table, client_feature_list, task_list, bid_table):
         if is_succ:
             succ_cnt += _task.required_client_num
     return succ_cnt, None
+
+def even_select_clients(ask_table, client_feature_list, task_list, bid_table):
+    num_of_client = len(client_feature_list)
+    free_client = [True] * num_of_client
+    succ_cnt = 0
+    task_bid_list = np.sum(bid_table, axis=0)-5
+    sorted_task_with_index = sorted(enumerate(task_bid_list), key=lambda x: x[1], reverse=True)
+    for task_idx, _ in enumerate(task_list):
+        _task = task_list[task_idx]
+       
+        ### Select clients
+        selected_client_index = []
+        clients_candidates = list(range(num_of_client))
+        while len(clients_candidates) > 0:
+            client_idx= random.choice(clients_candidates)
+            clients_candidates.remove(client_idx)
+            if free_client[client_idx] and buyer_give_more_money(client_idx, task_idx, ask_table, bid_table):
+                is_task_ready = select_one_client(client_idx, selected_client_index, free_client, _task)
+                if is_task_ready:
+                    break
+        
+        is_succ = check_trade_success_or_not(selected_client_index, _task, free_client)
+        reward = 0
+        i=0
+        task_num= len(task_bid_list)
+        while i < task_num:
+            if is_succ:
+                ### Cacluate reward  and count successful matching
+                refer_bid = task_bid_list[i]
+                for client_idx in selected_client_index:
+                    reward += refer_bid  / len(selected_client_index)
+                succ_cnt += _task.required_client_num
+            i += 1
+        
+    return succ_cnt, reward

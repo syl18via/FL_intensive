@@ -31,8 +31,8 @@ args = parser.parse_args()
 ### Experiment Configs
 MIX_RATIO = 0.8
 SIMULATE = False
-EPOCH_NUM = 3
-TRIAL_NUM = 10
+EPOCH_NUM = 35
+TRIAL_NUM = 1
 TASK_NUM = 2
 bid_per_loss_delta_space = [0.8,1,1.2]
 required_client_num_space = [1,2,3]
