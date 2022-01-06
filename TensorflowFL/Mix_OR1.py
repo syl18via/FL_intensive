@@ -31,11 +31,11 @@ args = parser.parse_args()
 ### Experiment Configs
 MIX_RATIO = 0.8
 SIMULATE = False
-EPOCH_NUM = 50
-TRIAL_NUM = 20
+EPOCH_NUM = 3
+TRIAL_NUM = 10
 TASK_NUM = 2
-bid_per_loss_delta_space = [1]
-required_client_num_space = [2,1]
+bid_per_loss_delta_space = [0.8,1,1.2]
+required_client_num_space = [1,2,3]
 target_labels_space = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]]
 
 START_TIME = time.time()
@@ -363,6 +363,12 @@ def run_one_trial():
                         task_list,
                         norm_bid_table)
                     norm_bid_table_first_epoch = norm_bid_table.copy()
+            elif args.policy == "even":
+                succ_cnt, reward =policy.even_select_clients(
+                        norm_ask_table, 
+                        client_feature_list, 
+                        task_list,
+                        norm_bid_table)
             else:
                 raise
         print("Client assignment Done ")
@@ -386,6 +392,18 @@ def run_one_trial():
                 total_reward_list.append(total_reward)
                 reward_sum.append(sum(total_reward_list))
                 
+
+            if args.policy == "even":
+                _, reward  = policy.even_select_clients(
+                    norm_ask_table,
+                    client_feature_list,
+                    task_list,
+                    norm_bid_table
+                    )
+                single_reward = len(selected_client_index) * reward
+                total_reward = single_reward - total_cost
+                total_reward_list.append(total_reward)
+                reward_sum.append(sum(total_reward_list))
                 # raise NotImplementedError("Current implementation is wrong")
                 # client_value_table = policy.calcualte_client_value(price_table, client_feature_list)
                 # task_price_list = np.sum(bid_table, axis=0)
@@ -417,4 +435,10 @@ if __name__ == "__main__":
         succ_cnt_list = run_one_trial()
         succ_cnt_table.append(succ_cnt_list)
     
-    pprint(succ_cnt_table)
+    accum_sum_list = []
+    tmp = 0
+    for l in succ_cnt_table:
+        tmp += sum(l)
+        accum_sum_list.append(tmp)
+
+    pprint.pprint(accum_sum_list)
